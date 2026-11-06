@@ -114,9 +114,10 @@ private:
       }
       return it;
     } else {
-      return std::ranges::partition_point(levels, [&](const LevelQty &level) {
-        return better(side, price, level.first);
-      });
+      return std::partition_point(levels.begin(), levels.end(),
+                                  [&](const LevelQty &level) {
+                                    return better(side, price, level.first);
+                                  });
     }
   }
 

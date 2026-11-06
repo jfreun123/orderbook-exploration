@@ -48,7 +48,7 @@ public:
 
   bool cancel(OrderId id) {
     for (Orders *orders : {&bids_, &asks_}) {
-      auto it = std::ranges::find(*orders, id, &Order::id);
+      auto it = find(*orders, id);
       if (it != orders->end()) {
         orders->erase(it);
         return true;
@@ -94,9 +94,14 @@ private:
 
   Orders &side_of(Side side) { return side == Side::Buy ? bids_ : asks_; }
 
+  static Orders::iterator find(Orders &orders, OrderId id) {
+    return std::find_if(orders.begin(), orders.end(),
+                        [id](const Order &order) { return order.id == id; });
+  }
+
   Order *find(OrderId id) {
     for (Orders *orders : {&bids_, &asks_}) {
-      auto it = std::ranges::find(*orders, id, &Order::id);
+      auto it = find(*orders, id);
       if (it != orders->end()) {
         return &*it;
       }
@@ -125,9 +130,10 @@ private:
 
   void rest(const Order &order) {
     Orders &orders = side_of(order.side);
-    auto pos = std::ranges::partition_point(orders, [&](const Order &other) {
-      return better(order.side, order.price, other.price);
-    });
+    auto pos = std::partition_point(
+        orders.begin(), orders.end(), [&](const Order &other) {
+          return better(order.side, order.price, other.price);
+        });
     orders.insert(pos, order);
   }
 

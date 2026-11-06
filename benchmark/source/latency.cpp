@@ -143,7 +143,7 @@ double timer_floor_ns(double per_ns) {
     const std::uint64_t start = ticks();
     sample = ticks() - start;
   }
-  std::ranges::sort(samples);
+  std::sort(samples.begin(), samples.end());
   return static_cast<double>(samples[samples.size() / 2]) / per_ns;
 }
 
@@ -222,7 +222,7 @@ void report(const Options &options, std::string_view description,
     if (sorted.empty()) {
       return;
     }
-    std::ranges::sort(sorted);
+    std::sort(sorted.begin(), sorted.end());
     std::cerr << std::format("{:<11} {:>9} {:>6} {:>6} {:>6} {:>7} {:>8}\n",
                              name, sorted.size(), percentile(sorted, 50),
                              percentile(sorted, 90), percentile(sorted, 99),

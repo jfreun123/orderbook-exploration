@@ -76,10 +76,10 @@ Average ns per message, book filled to `target_orders` first (`results/throughpu
 
 | book | 1k orders | 10k orders | 100k orders |
 |---|---|---|---|
-| naive | 316 | 842 | 3,637 |
-| map | 38 | 39 | 39 |
-| vector | 38 | 38 | 38 |
-| array | 29 | 30 | 29 |
+| naive | 249 | 724 | 2,995 |
+| map | 39 | 38 | 40 |
+| vector | 37 | 37 | 39 |
+| array | 28 | 28 | 29 |
 
 ### Latency per message
 
@@ -106,12 +106,12 @@ Median / p90 per update, ns (`results/levels-*.txt`):
 
 | | hot, fresh heap | out of cache, fresh heap | out of cache, scattered heap |
 |---|---|---|---|
-| `std::map` | 51 / 76 | 232 / 467 | 294 / 1,391 |
-| reverse vector, linear search | 26 / 49 | 79 / 207 | 79 / 212 |
-| reverse vector, binary search | 36 / 48 | 93 / 167 | 94 / 174 |
+| `std::map` | 50 / 75 | 234 / 440 | 295 / 1,292 |
+| reverse vector, linear search | 26 / 50 | 80 / 208 | 77 / 214 |
+| reverse vector, binary search | 37 / 48 | 96 / 166 | 92 / 160 |
 
-- Hot in cache the vector already wins the median, 26 vs 51 ns, but the gap opens once the book is pushed out of cache: then every map node is a likely cache miss and a scattered heap makes it worse, while the vector's levels stay contiguous and do not care where the heap put them.
-- Linear search from the back wins the median because most updates land in the last few slots, but its tail is long when an update lands deep in the book (p99 446 ns hot); binary search keeps the tail short (p99 185 ns).
+- Hot in cache the vector already wins the median, 26 vs 50 ns, but the gap opens once the book is pushed out of cache: then every map node is a likely cache miss and a scattered heap makes it worse, while the vector's levels stay contiguous and do not care where the heap put them.
+- Linear search from the back wins the median because most updates land in the last few slots, but its tail is long when an update lands deep in the book (p99 453 ns hot); binary search keeps the tail short (p99 189 ns).
 
 `results/levels-cold.png` is the closest chart to the one in the talk.
 

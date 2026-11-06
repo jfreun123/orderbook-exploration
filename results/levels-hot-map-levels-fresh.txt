@@ -1,4 +1,4 @@
-timer floor: 11.8 ns (median of an empty measurement)
+timer floor: 11.7 ns (median of an empty measurement)
 map-levels fresh levels=1000 updates=2000000 evict_kb=0 levels_at_end=817+831
 op              count    p50    p90    p99   p99.9      max
-update        2000000     51     76     99     185   133339
+update        2000000     50     75    101     195   147025
