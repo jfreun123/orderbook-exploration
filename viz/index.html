@@ -1,0 +1,350 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Order Book Replay</title>
+<!--
+  Plays back a trace written by app/replay (C++):
+
+    ./build/app/replay --book array --messages 600 > viz/trace.json
+
+  Every frame is the book's own snapshot after that call; nothing here
+  re-implements matching. Serve this folder over HTTP (for example
+  `python3 -m http.server -d viz`) or pick a trace file with the button.
+-->
+<style>
+  :root {
+    --surface: #fcfcfb;
+    --panel: #f3f2ee;
+    --ink: #1f1f1e;
+    --muted: #6b6a63;
+    --rule: #e4e3de;
+    --bid: #2a78d6;
+    --bid-soft: #cde2fb;
+    --ask: #eb6834;
+    --ask-soft: #fbd9c9;
+    --focus: #1f1f1e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --surface: #1a1a19;
+      --panel: #242423;
+      --ink: #f0efec;
+      --muted: #a3a29a;
+      --rule: #34342f;
+      --bid: #3987e5;
+      --bid-soft: #1d3a5e;
+      --ask: #d95926;
+      --ask-soft: #5a2c18;
+      --focus: #f0efec;
+    }
+  }
+  :root[data-theme="dark"] {
+    --surface: #1a1a19;
+    --panel: #242423;
+    --ink: #f0efec;
+    --muted: #a3a29a;
+    --rule: #34342f;
+    --bid: #3987e5;
+    --bid-soft: #1d3a5e;
+    --ask: #d95926;
+    --ask-soft: #5a2c18;
+    --focus: #f0efec;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--surface);
+    color: var(--ink);
+    font: 14px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 980px; margin: 0 auto; padding: 16px; }
+  header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
+  h1 { font-size: 18px; margin: 0; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .controls {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    margin: 12px 0; padding: 8px; background: var(--panel); border-radius: 8px;
+  }
+  button, .file {
+    font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--rule); border-radius: 6px; padding: 4px 10px; cursor: pointer;
+  }
+  button:hover, .file:hover { border-color: var(--muted); }
+  .file input { display: none; }
+  input[type="range"] { flex: 1 1 160px; min-width: 120px; }
+  .step { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 92px; }
+  label.speed { display: flex; align-items: center; gap: 6px; color: var(--muted); }
+  label.speed input { flex: 0 0 90px; min-width: 0; }
+
+  .call {
+    font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--panel); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px;
+    overflow-x: auto; white-space: pre;
+  }
+  .call .ret-true { color: var(--ink); font-weight: 600; }
+  .call .ret-false { color: var(--muted); font-weight: 600; }
+  .call .note { color: var(--muted); }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 16px; }
+  @media (max-width: 720px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+  .ladder { border-top: 1px solid var(--rule); }
+  .row {
+    display: grid; grid-template-columns: 56px minmax(0, 1fr); align-items: center;
+    min-height: 30px; border-bottom: 1px solid var(--rule);
+  }
+  .price {
+    font-variant-numeric: tabular-nums; text-align: right; padding-right: 10px;
+    font-weight: 600;
+  }
+  .row.ask .price { color: var(--ask); }
+  .row.bid .price { color: var(--bid); }
+  .queue { display: flex; gap: 2px; padding: 3px 0; overflow: hidden; }
+  .order {
+    flex: none; height: 22px; border-radius: 4px; display: flex; align-items: center;
+    justify-content: center; font-size: 11px; font-variant-numeric: tabular-nums;
+    color: var(--ink); white-space: nowrap; overflow: hidden;
+    transition: width 120ms ease;
+  }
+  .row.bid .order { background: var(--bid-soft); }
+  .row.ask .order { background: var(--ask-soft); }
+  .order.touched { outline: 2px solid var(--focus); outline-offset: -2px; }
+  .order.maker { box-shadow: inset 0 -4px 0 var(--focus); }
+  .spread {
+    display: grid; grid-template-columns: 56px minmax(0, 1fr); color: var(--muted);
+    font-size: 12px; padding: 4px 0; border-bottom: 1px solid var(--rule);
+  }
+  .spread span:first-child { text-align: right; padding-right: 10px; }
+
+  aside h2 { font-size: 13px; margin: 0 0 6px; color: var(--muted); font-weight: 600; }
+  .tape { list-style: none; margin: 0 0 16px; padding: 0; font-size: 12px; }
+  .tape li {
+    display: flex; justify-content: space-between; padding: 3px 0;
+    border-bottom: 1px solid var(--rule); font-variant-numeric: tabular-nums;
+  }
+  .tape li.new { font-weight: 600; }
+  .counts { font-size: 12px; display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; }
+  .counts span:nth-child(2n) { text-align: right; font-variant-numeric: tabular-nums; }
+  .legend { font-size: 12px; color: var(--muted); margin-top: 16px; }
+  .legend div { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+  .swatch { width: 22px; height: 14px; border-radius: 3px; flex: none; }
+  .error { color: var(--ask); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Order book replay</h1>
+    <span class="meta" id="meta">loading trace.json…</span>
+  </header>
+
+  <div class="controls">
+    <button id="prev" title="Previous message (←)">◀</button>
+    <button id="play" title="Play or pause (space)">Play</button>
+    <button id="next" title="Next message (→)">▶</button>
+    <input id="scrub" type="range" min="0" max="0" value="0" aria-label="Message">
+    <span class="step" id="step">0 / 0</span>
+    <label class="speed">speed <input id="speed" type="range" min="1" max="30" value="4"></label>
+    <label class="file">Open trace…<input id="file" type="file" accept=".json"></label>
+  </div>
+
+  <div class="call" id="call">&nbsp;</div>
+
+  <div class="layout">
+    <div>
+      <div class="ladder" id="asks"></div>
+      <div class="spread" id="spread"><span></span><span></span></div>
+      <div class="ladder" id="bids"></div>
+    </div>
+    <aside>
+      <h2>Trades</h2>
+      <ul class="tape" id="tape"></ul>
+      <h2>Calls so far</h2>
+      <div class="counts" id="counts"></div>
+      <div class="legend">
+        <div><span class="swatch" style="background:var(--ask-soft)"></span>ask (sell) order: #id·quantity, wider = more</div>
+        <div><span class="swatch" style="background:var(--bid-soft)"></span>bid (buy) order: #id·quantity, wider = more</div>
+        <div><span class="swatch" style="outline:2px solid var(--focus);outline-offset:-2px"></span>the order this call sent</div>
+        <div><span class="swatch" style="background:var(--panel);box-shadow:inset 0 -4px 0 var(--focus)"></span>traded this call, still resting</div>
+        <div>Each row's queue runs oldest (trades first) on the left to newest on the right.</div>
+      </div>
+    </aside>
+  </div>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  let trace = null;
+  let index = 0;
+  let timer = null;
+  let maxQty = 1;
+
+  function describe(step) {
+    const args = step.call === "cancel" ? `id=${step.id}`
+      : step.call === "add_market" ? `id=${step.id}, ${step.side}, qty=${step.qty}`
+      : step.call === "modify" ? `id=${step.id}, price=${step.price}, qty=${step.qty}`
+      : `id=${step.id}, ${step.side}, price=${step.price}, qty=${step.qty}`;
+    let note;
+    if (!step.ok) {
+      note = step.call === "cancel" || step.call === "modify"
+        ? "no such resting order: it already filled or was cancelled"
+        : "rejected";
+    } else {
+      const traded = step.fills.reduce((sum, f) => sum + f[3], 0);
+      const rested = restingQty(step, step.id);
+      const parts = [];
+      if (step.fills.length) parts.push(`${step.fills.length} fill${step.fills.length > 1 ? "s" : ""}, ${traded} traded`);
+      if (step.call === "cancel") parts.push("removed from its queue");
+      else if (rested > 0) parts.push(`${rested} resting`);
+      else if (step.call === "add_market" && traded < step.qty) parts.push(`${step.qty - traded} unfilled, dropped`);
+      note = parts.join("; ") || "nothing to trade against";
+    }
+    return `book.${step.call}(${args})  →  <span class="ret-${step.ok}">${step.ok}</span>   <span class="note">// ${note}</span>`;
+  }
+
+  function restingQty(step, id) {
+    for (const level of [...step.bids, ...step.asks]) {
+      for (const [oid, qty] of level.orders) if (oid === id) return qty;
+    }
+    return 0;
+  }
+
+  function renderSide(container, levels, cls, makers, focusId) {
+    container.replaceChildren();
+    const depth = trace.depth;
+    // Asks are drawn worst price first so the two best prices meet in the middle.
+    const rows = cls === "ask" ? [...levels].reverse() : levels;
+    const pad = depth - rows.length;
+    if (cls === "ask") for (let i = 0; i < pad; i++) container.append(emptyRow(cls));
+    for (const level of rows) {
+      const row = document.createElement("div");
+      row.className = `row ${cls}`;
+      const price = document.createElement("div");
+      price.className = "price";
+      price.textContent = level.price;
+      const queue = document.createElement("div");
+      queue.className = "queue";
+      for (const [id, qty] of level.orders) {
+        const order = document.createElement("div");
+        order.className = "order";
+        if (id === focusId) order.classList.add("touched");
+        if (makers.has(id)) order.classList.add("maker");
+        order.style.width = `${34 + (qty / maxQty) * 46}px`;
+        order.textContent = `#${id}·${qty}`;
+        order.title = `order ${id}, ${qty} left`;
+        queue.append(order);
+      }
+      row.append(price, queue);
+      container.append(row);
+    }
+    if (cls === "bid") for (let i = 0; i < pad; i++) container.append(emptyRow(cls));
+  }
+
+  function emptyRow(cls) {
+    const row = document.createElement("div");
+    row.className = `row ${cls}`;
+    row.innerHTML = '<div class="price"></div><div class="queue"></div>';
+    return row;
+  }
+
+  function render() {
+    const step = trace.steps[index];
+    $("call").innerHTML = describe(step);
+    $("step").textContent = `${index + 1} / ${trace.steps.length}`;
+    $("scrub").value = index;
+
+    const makers = new Set(step.fills.map((f) => f[1]));
+    const focusId = step.ok && step.call !== "cancel" ? step.id : null;
+    renderSide($("asks"), step.asks, "ask", makers, focusId);
+    renderSide($("bids"), step.bids, "bid", makers, focusId);
+
+    const bid = step.bids[0]?.price;
+    const ask = step.asks[0]?.price;
+    const spread = $("spread").children;
+    spread[0].textContent = "";
+    spread[1].textContent = bid !== undefined && ask !== undefined
+      ? `spread ${ask - bid} · ${step.resting} orders resting`
+      : `one side empty · ${step.resting} orders resting`;
+
+    // The last ten trades up to this step, newest first.
+    const tape = $("tape");
+    tape.replaceChildren();
+    let shown = 0;
+    for (let i = index; i >= 0 && shown < 10; i--) {
+      for (let j = trace.steps[i].fills.length - 1; j >= 0 && shown < 10; j--) {
+        const [taker, maker, price, qty] = trace.steps[i].fills[j];
+        const li = document.createElement("li");
+        if (i === index) li.className = "new";
+        li.innerHTML = `<span>${qty} @ ${price}</span><span>#${taker} ← #${maker}</span>`;
+        tape.append(li);
+        shown++;
+      }
+    }
+    if (!shown) tape.innerHTML = '<li><span class="meta">none yet</span></li>';
+
+    const counts = { add_limit: 0, add_market: 0, cancel: 0, modify: 0, fills: 0 };
+    for (let i = 0; i <= index; i++) {
+      counts[trace.steps[i].call]++;
+      counts.fills += trace.steps[i].fills.length;
+    }
+    $("counts").innerHTML = Object.entries(counts)
+      .map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
+  }
+
+  function go(to) {
+    if (!trace) return;
+    index = Math.max(0, Math.min(trace.steps.length - 1, to));
+    render();
+  }
+
+  function play(on) {
+    clearInterval(timer);
+    timer = null;
+    $("play").textContent = on ? "Pause" : "Play";
+    if (!on) return;
+    timer = setInterval(() => {
+      if (index >= trace.steps.length - 1) return play(false);
+      go(index + 1);
+    }, 1000 / Number($("speed").value));
+  }
+
+  function load(data) {
+    trace = data;
+    maxQty = Math.max(1, ...trace.steps.flatMap((s) =>
+      [...s.bids, ...s.asks].flatMap((l) => l.orders.map((o) => o[1]))));
+    $("meta").textContent =
+      `${trace.book} book · ${trace.steps.length} messages · seed ${trace.seed} · generated by app/replay`;
+    $("scrub").max = trace.steps.length - 1;
+    go(0);
+  }
+
+  $("prev").onclick = () => { play(false); go(index - 1); };
+  $("next").onclick = () => { play(false); go(index + 1); };
+  $("play").onclick = () => play(!timer);
+  $("scrub").oninput = (e) => { play(false); go(Number(e.target.value)); };
+  $("speed").oninput = () => { if (timer) play(true); };
+  $("file").onchange = async (e) => {
+    const file = e.target.files[0];
+    if (file) load(JSON.parse(await file.text()));
+  };
+  document.addEventListener("keydown", (e) => {
+    if (e.target.tagName === "INPUT") return;
+    if (e.key === "ArrowRight") { play(false); go(index + 1); }
+    else if (e.key === "ArrowLeft") { play(false); go(index - 1); }
+    else if (e.key === " ") { e.preventDefault(); play(!timer); }
+  });
+
+  const source = new URLSearchParams(location.search).get("trace") || "trace.json";
+  fetch(source)
+    .then((r) => { if (!r.ok) throw new Error(`${source}: HTTP ${r.status}`); return r.json(); })
+    .then(load)
+    .catch((err) => {
+      $("meta").innerHTML = `<span class="error">could not load ${source} (${err.message}); open a trace file instead</span>`;
+    });
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,8 @@
+timer floor: 11.7 ns (median of an empty measurement)
+vector scattered orders=10000 messages=2000000 resting_at_end=17776
+op              count    p50    p90    p99   p99.9      max
+add_limit      900265     77    203    444     961  1566905
+add_market      99939     69    189    370     610  1093866
+cancel         800297     74    209    343     500  1138630
+modify         199499     78    255    460     706  1096154
+all           2000000     76    210    402     876  1566905

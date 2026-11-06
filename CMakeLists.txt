@@ -9,8 +9,8 @@ endif()
 project(
     orderbook-exploration
     VERSION 0.1.0
-    DESCRIPTION "Short description"
-    HOMEPAGE_URL "https://example.com/"
+    DESCRIPTION "A limit order book, built several ways"
+    HOMEPAGE_URL "https://github.com/jfreun123/orderbook-exploration"
     LANGUAGES CXX
 )
 
@@ -21,6 +21,7 @@ option(orderbook-exploration_DEVELOPER_MODE "Enable developer mode" ON)
 # ---- Build source ----
 
 add_subdirectory(source)
+add_subdirectory(app)
 
 # ---- Developer mode targets ----
 
