@@ -139,9 +139,13 @@
   .primer ul { margin: 8px 0 4px; padding-left: 20px; }
   .primer li { margin: 4px 0; }
   .story {
-    border-left: 4px solid var(--rule); padding: 4px 0 4px 14px; margin: 0 0 16px;
-    min-height: 96px;
+    border-left: 4px solid var(--rule); padding: 4px 8px 4px 14px; margin: 0 0 16px;
+    /* A fixed height, so the ladder below stays still from message to message.
+       Tall enough for the longest story in the default trace on a desktop;
+       anything longer scrolls inside the box. */
+    height: 23em; overflow-y: auto;
   }
+  @media (max-width: 720px) { .story { height: 30em; } }
   .story.buy { border-left-color: var(--bid); }
   .story.sell { border-left-color: var(--ask); }
   .story h2 { font-size: 13px; margin: 0 0 4px; color: var(--muted); font-weight: 600; }
