@@ -5,8 +5,10 @@
     ./build/app/replay --book array --messages 600 > viz/trace.json
 
   Serve this folder over HTTP (python3 -m http.server -d viz) or pick a
-  trace file with the button. ?trace=FILE loads another trace; ?embed starts
-  with the primer collapsed, for an iframe inside a blog post.
+  trace file with the button. ?trace=FILE loads another trace. ?embed is for
+  an iframe inside a blog post: it starts with the primer collapsed and posts
+  the page's height to the parent window as {orderbookReplayHeight} whenever
+  it changes, so the post can size the frame to fit.
 
   Every frame is the book's own snapshot after that call; nothing here
   re-implements matching. The "What just happened" story is built only from
@@ -583,7 +585,13 @@
     else if (e.key === " ") { e.preventDefault(); play(!timer); }
   });
 
-  if (params.has("embed")) $("primer").open = false;
+  if (params.has("embed")) {
+    $("primer").open = false;
+    const main = document.querySelector("main");
+    new ResizeObserver(() => {
+      window.parent.postMessage({ orderbookReplayHeight: main.offsetHeight }, "*");
+    }).observe(main);
+  }
   const source = params.get("trace") || "trace.json";
   fetch(source)
     .then((r) => { if (!r.ok) throw new Error(`${source}: HTTP ${r.status}`); return r.json(); })
