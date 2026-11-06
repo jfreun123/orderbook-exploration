@@ -1,17 +1,20 @@
-# cpp-starter
+# orderbook-exploration
 
-A C++23 project template with CMake, Google Test, clang-tidy, cppcheck, clang-format, ASAN/TSAN, and GitHub Actions CI.
+Building a limit order book several ways, to learn what makes one fast. Built from [cpp-starter](https://github.com/jfreun123/cpp-starter), like [C1M](https://github.com/jfreun123/C1M).
 
-## Using This Template
+## Goals
 
-1. Click **Use this template** on GitHub (or `gh repo create --template jacobfreund/cpp-starter`)
-2. Clone your new repo
-3. Rename `cpp-starter` → your project name in:
-   - `CMakeLists.txt` (`project(...)` and the `DEVELOPER_MODE` option)
-   - `CMakePresets.json` (the `cpp-starter_DEVELOPER_MODE` cache variable)
-   - `source/CMakeLists.txt` (the `cpp-starter_lib` target)
-   - `test/CMakeLists.txt` and `benchmark/CMakeLists.txt` (link targets)
-4. Replace `source/add.hpp`, `test/source/add_test.cpp`, and `benchmark/source/benchmark.cpp` with your code
+- [ ] Build one limit order book with price-time priority: add, cancel, modify, and execution against the other side, with the matching rules written down and tested
+- [ ] Build the same book several ways so the data structures can be compared like for like: `std::map` of price levels, a sorted vector, an array indexed by tick; orders at a level in a `std::list`, an intrusive list, a ring buffer
+- [ ] Measure every version: nanoseconds per add, cancel and execution, memory per resting order, and how each changes with the number of levels and the number of orders at a level
+- [ ] Replay a real feed through each book and check that they agree with each other and with the published book
+- [ ] Reproduce the slow cases and diagnose them with standard tools (`perf`, cachegrind, a benchmark that isolates one operation): a level holding thousands of orders, a cancel of the oldest order, a sweep through many levels, a book that grows deep
+- [ ] Be able to answer these from code and measurements in this repo:
+  - [ ] What is in an order book, and what does price-time priority mean in practice?
+  - [ ] What happens, step by step, when a market order arrives? A limit order that crosses? A cancel of an order that has partly filled?
+  - [ ] Which operations does a matching engine spend its time on, and which data structure fits each one?
+  - [ ] Why is `std::map` the obvious choice for price levels, and when is it the wrong one?
+  - [ ] Design an order book for one instrument at a million messages a second: what is stored, where, and why
 
 ## Prerequisites
 
@@ -71,7 +74,7 @@ cmake --build build -t format-fix
 ## Project Structure
 
 ```
-cpp-starter/
+orderbook-exploration/
 ├── source/                  # Header-only library
 │   ├── CMakeLists.txt
 │   └── add.hpp              # Replace with your headers

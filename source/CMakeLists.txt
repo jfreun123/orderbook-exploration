@@ -1,11 +1,11 @@
 # ---- Library ----
 
-add_library(cpp-starter_lib INTERFACE)
+add_library(orderbook-exploration_lib INTERFACE)
 
 target_include_directories(
-    cpp-starter_lib
+    orderbook-exploration_lib
     INTERFACE
     "$<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/source>"
 )
 
-target_compile_features(cpp-starter_lib INTERFACE cxx_std_23)
+target_compile_features(orderbook-exploration_lib INTERFACE cxx_std_23)
