@@ -131,6 +131,25 @@
   .legend div { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
   .swatch { width: 22px; height: 14px; border-radius: 3px; flex: none; }
   .error { color: var(--ask); }
+
+  .primer {
+    background: var(--panel); border-radius: 8px; padding: 10px 14px; margin: 12px 0 0;
+  }
+  .primer summary { cursor: pointer; font-weight: 600; }
+  .primer ul { margin: 8px 0 4px; padding-left: 20px; }
+  .primer li { margin: 4px 0; }
+  .story {
+    border-left: 4px solid var(--rule); padding: 4px 0 4px 14px; margin: 0 0 16px;
+    min-height: 96px;
+  }
+  .story.buy { border-left-color: var(--bid); }
+  .story.sell { border-left-color: var(--ask); }
+  .story h2 { font-size: 13px; margin: 0 0 4px; color: var(--muted); font-weight: 600; }
+  .story p { margin: 4px 0; }
+  .story ul { margin: 4px 0; padding-left: 20px; }
+  .story .summary { color: var(--muted); font-size: 13px; }
+  .tag-buy { color: var(--bid); font-weight: 600; }
+  .tag-sell { color: var(--ask); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -139,6 +158,20 @@
     <h1>Order book replay</h1>
     <span class="meta" id="meta">loading trace.json…</span>
   </header>
+
+  <details class="primer" id="primer" open>
+    <summary>New to order books? Start here</summary>
+    <ul>
+      <li>An <b>order book</b> is the list of everyone currently waiting to buy or sell one thing, say one company's stock.</li>
+      <li><span class="tag-buy">Bids</span> (blue, bottom half) are people waiting to <b>buy</b>, each with the most they are willing to pay.
+          <span class="tag-sell">Asks</span> (orange, top half) are people waiting to <b>sell</b>, each with the least they are willing to accept.</li>
+      <li>The <b>best bid</b> is the highest bid and the <b>best ask</b> is the lowest ask. They meet in the middle of the ladder, and the gap between them is the <b>spread</b>. Nobody in the book agrees on a price yet, which is why they are all waiting.</li>
+      <li>A <b>trade</b> happens when a new order is willing to meet someone already waiting: a buyer offering at least the lowest ask, or a seller accepting at most the highest bid.</li>
+      <li>Who trades first? The <b>best price</b> first, and at the same price, <b>whoever arrived first</b>. This is called <i>price-time priority</i>. Each row is a line of people waiting at one price, front of the line on the left.</li>
+      <li>Four kinds of message arrive: a <b>limit order</b> (buy or sell at this price or better, and wait if nobody matches), a <b>market order</b> (trade right now at any price, never wait), a <b>cancel</b>, and a <b>modify</b> (change an order's price or size).</li>
+    </ul>
+    Press <b>▶</b> (or the right arrow key) to step through one message at a time, and read <b>What just happened</b> below.
+  </details>
 
   <div class="controls">
     <button id="prev" title="Previous message (←)">◀</button>
@@ -154,6 +187,7 @@
 
   <div class="layout">
     <div>
+      <div class="story" id="story" aria-live="polite"></div>
       <div class="ladder" id="asks"></div>
       <div class="spread" id="spread"><span></span><span></span></div>
       <div class="ladder" id="bids"></div>
@@ -250,9 +284,213 @@
     return row;
   }
 
+  // ---- Plain-English narration -------------------------------------------
+  // Built only from the trace: the call, its fills, and the book before and
+  // after it. The book view is limited to the top levels, so an order deeper
+  // than that is described without its place in line.
+
+  let events = new Map(); // id -> [{at, kind}] in message order
+
+  function buildHistory() {
+    events = new Map();
+    const note = (id, at, kind) => {
+      if (!events.has(id)) events.set(id, []);
+      events.get(id).push({ at, kind });
+    };
+    trace.steps.forEach((step, at) => {
+      if (step.ok && step.call === "cancel") note(step.id, at, "cancelled");
+      for (const [taker, maker] of step.fills) {
+        note(maker, at, "traded");
+        note(taker, at, "traded");
+      }
+    });
+  }
+
+  const EMPTY = { bids: [], asks: [] };
+  const stateAt = (at) => (at < 0 ? EMPTY : trace.steps[at]);
+  const person = (side) => (side === "buy" ? "buyer" : "seller");
+  const bookName = (side) => (side === "buy" ? "bid" : "ask");
+  const tag = (side, text) => `<span class="tag-${side}">${text}</span>`;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+
+  // Where order `id` sits in a book state, or null if it is not in view.
+  function findOrder(state, id) {
+    for (const [side, levels] of [["buy", state.bids], ["sell", state.asks]]) {
+      for (const level of levels) {
+        const place = level.orders.findIndex((o) => o[0] === id);
+        if (place >= 0) {
+          return { side, price: level.price, qty: level.orders[place][1],
+                   place: place + 1, line: level.orders.length };
+        }
+      }
+    }
+    return null;
+  }
+
+  function lastEventBefore(id, at) {
+    const list = (events.get(id) || []).filter((e) => e.at < at);
+    return list[list.length - 1] || null;
+  }
+
+  // The trading part of a limit or market order's story.
+  function tradeStory(step, before, side, limit) {
+    const other = side === "buy" ? "sell" : "buy";
+    const opposite = side === "buy" ? before.asks : before.bids;
+    const out = [];
+    if (step.fills.length === 0) {
+      if (opposite.length === 0) {
+        out.push(`There are no ${tag(other, person(other) + "s")} in the book at all, so nothing can trade.`);
+      } else if (limit !== null) {
+        const best = opposite[0].price;
+        out.push(side === "buy"
+          ? `The cheapest ${tag("sell", "seller")} is asking ${best}, which is more than ${limit}, so nobody will sell at this price yet.`
+          : `The highest ${tag("buy", "buyer")} is bidding ${best}, which is less than ${limit}, so nobody will buy at this price yet.`);
+      }
+      return out;
+    }
+    const traded = step.fills.reduce((sum, f) => sum + f[3], 0);
+    out.push(limit === null
+      ? `It trades <b>immediately</b> with the ${tag(other, person(other) + "s")} already waiting, best price first:`
+      : side === "buy"
+        ? `${tag("sell", "Sellers")} are already asking ${limit} or less, so it trades <b>immediately</b>. It takes the cheapest asks first, and at the same price, whoever has waited longest:`
+        : `${tag("buy", "Buyers")} are already bidding ${limit} or more, so it trades <b>immediately</b>. It takes the highest bids first, and at the same price, whoever has waited longest:`);
+    const items = step.fills.map(([, maker, price, qty]) => {
+      const gone = findOrder(before, maker) && !findOrder(step, maker);
+      return `<li>${qty} traded with ${tag(other, person(other))} #${maker} at ${price}` +
+        (gone ? ` (that empties #${maker}, so it leaves the book)` : "") + "</li>";
+    });
+    out.push(`<ul>${items.join("")}</ul>`);
+    if (limit !== null && step.fills.some((f) => f[2] !== limit)) {
+      out.push(`Each trade happens at the price the waiting order asked for, not at ${limit}. ` +
+        (side === "buy"
+          ? `The ${tag("buy", "buyer")} was willing to pay up to ${limit} and got a better deal.`
+          : `The ${tag("sell", "seller")} would have accepted as little as ${limit} and got a better deal.`));
+    }
+    if (traded > 1) out.push(`In total ${traded} changed hands.`);
+    return out;
+  }
+
+  // What happened to the rest of a limit order after trading.
+  function restStory(step, side, limit) {
+    const rested = findOrder(step, step.id);
+    const traded = step.fills.reduce((sum, f) => sum + f[3], 0);
+    if (traded >= step.qty) return ["The whole order was filled, so nothing is left to wait in the book."];
+    const left = step.qty - traded;
+    let text = `${traded > 0 ? `The ${left} left over` : `All ${left}`} ${left === 1 ? "waits" : "wait"} in the book as a ${tag(side, bookName(side))} at ${limit}.`;
+    if (rested) {
+      text += rested.line === 1
+        ? " It is the only order at that price."
+        : ` It joins the <b>back of the line</b> at that price, behind ${plural(rested.place - 1, "order")} that arrived earlier.`;
+    } else {
+      text += " (That price is further from the middle than this view shows.)";
+    }
+    return [text];
+  }
+
+  function bestPrices(state) {
+    return { bid: state.bids[0]?.price, ask: state.asks[0]?.price };
+  }
+
+  function summary(before, after) {
+    const was = bestPrices(before);
+    const now = bestPrices(after);
+    const parts = [];
+    if (was.bid !== now.bid) {
+      parts.push(now.bid === undefined ? "There are no bids left."
+        : was.bid === undefined ? `The best bid is now ${now.bid}.`
+        : `The best bid moved ${now.bid > was.bid ? "up" : "down"} from ${was.bid} to ${now.bid}.`);
+    }
+    if (was.ask !== now.ask) {
+      parts.push(now.ask === undefined ? "There are no asks left."
+        : was.ask === undefined ? `The best ask is now ${now.ask}.`
+        : `The best ask moved ${now.ask > was.ask ? "up" : "down"} from ${was.ask} to ${now.ask}.`);
+    }
+    if (now.bid !== undefined && now.ask !== undefined) {
+      parts.push(`Best bid ${now.bid}, best ask ${now.ask}: the spread is ${now.ask - now.bid}.`);
+    }
+    return parts.join(" ");
+  }
+
+  function notResting(step, at) {
+    const last = lastEventBefore(step.id, at);
+    const verb = step.call === "cancel" ? "cancel" : "change";
+    if (last?.kind === "cancelled") {
+      return [`The owner of order #${step.id} asks to ${verb} it, but it was already cancelled at message ${last.at + 1}.`,
+              "Nothing changes, and the book answers <code>false</code>."];
+    }
+    if (last?.kind === "traded") {
+      return [`The owner of order #${step.id} asks to ${verb} it, but it already traded away completely (its last trade was at message ${last.at + 1}), so there is nothing left to ${verb}.`,
+              "Nothing changes, and the book answers <code>false</code>. This happens all the time in real markets: the request and the trade race each other, and here the trade won."];
+    }
+    return [`The owner of order #${step.id} asks to ${verb} it, but there is no such order in the book. The book answers <code>false</code>.`];
+  }
+
+  function narrate(at) {
+    const step = trace.steps[at];
+    const before = stateAt(at - 1);
+    let side = step.side;
+    let lines = [];
+
+    if (step.call === "add_limit") {
+      lines.push(side === "buy"
+        ? `A ${tag("buy", "buyer")} sends a limit order, #${step.id}: <b>buy ${step.qty}</b> at a price of <b>${step.price} or less</b>.`
+        : `A ${tag("sell", "seller")} sends a limit order, #${step.id}: <b>sell ${step.qty}</b> at a price of <b>${step.price} or more</b>.`);
+      lines.push(...tradeStory(step, before, side, step.price));
+      lines.push(...restStory(step, side, step.price));
+    } else if (step.call === "add_market") {
+      lines.push(`A ${tag(side, person(side))} sends a market order, #${step.id}: <b>${side} ${step.qty} right now</b>, at whatever price it takes.`);
+      lines.push(...tradeStory(step, before, side, null));
+      const traded = step.fills.reduce((sum, f) => sum + f[3], 0);
+      if (traded < step.qty) {
+        lines.push(`${traded > 0 ? `That only covers ${traded}, so the other ${step.qty - traded} is` : "The whole order is"} simply dropped: a market order never waits in the book.`);
+      }
+    } else if (!step.ok) {
+      const old = findOrder(before, step.id);
+      if (old) side = old.side;
+      lines = notResting(step, at);
+    } else if (step.call === "cancel") {
+      const old = findOrder(before, step.id);
+      if (old) {
+        side = old.side;
+        lines.push(`The owner of order #${step.id} cancels it. It was a ${tag(side, bookName(side))} for ${old.qty} at ${old.price}, ${old.place === 1 ? "first in line" : `number ${old.place} in line`} at that price.`);
+        if (old.line === 1) lines.push(`It was the only order at ${old.price}, so that price disappears from the book.`);
+        else if (old.place < old.line) lines.push(`It is removed, and the ${plural(old.line - old.place, "order")} behind it each move up one place.`);
+        else lines.push("It was last in line, so nobody else moves.");
+      } else {
+        lines.push(`The owner of order #${step.id} cancels it, and it is removed from the book. (It was further from the middle than this view shows.)`);
+      }
+    } else if (step.call === "modify") {
+      const old = findOrder(before, step.id);
+      if (old && old.price === step.price && step.qty <= old.qty) {
+        lines.push(step.qty === old.qty
+          ? `The owner of order #${step.id} sends a modify that changes nothing. It keeps its place in line.`
+          : `The owner of ${tag(side, bookName(side))} #${step.id} <b>shrinks</b> it from ${old.qty} to ${step.qty}, at the same price of ${step.price}.`);
+        if (step.qty !== old.qty) lines.push("It <b>keeps its place in line</b>: making an order smaller can't let it cut ahead of anyone.");
+      } else if (!old) {
+        lines.push(`The owner of ${tag(side, bookName(side))} #${step.id} changes it to <b>${step.qty} at ${step.price}</b>. (Its old price was further from the middle than this view shows.)`);
+        lines.push(...tradeStory(step, before, side, step.price));
+        lines.push(...restStory(step, side, step.price));
+      } else {
+        const from = `${old.qty} at ${old.price}`;
+        const why = old.price === step.price ? "it got bigger" : "its price changed";
+        lines.push(`The owner of ${tag(side, bookName(side))} #${step.id} changes it from ${from} to <b>${step.qty} at ${step.price}</b>.`);
+        lines.push(`Because ${why}, it <b>loses its place in line</b>: the book takes it out and treats it as a brand-new order. That's only fair to the people who were already waiting.`);
+        lines.push(...tradeStory(step, before, side, step.price));
+        lines.push(...restStory(step, side, step.price));
+      }
+    }
+
+    const story = $("story");
+    story.className = `story ${side}`;
+    story.innerHTML = `<h2>What just happened (message ${at + 1})</h2>` +
+      lines.map((l) => (l.startsWith("<ul>") ? l : `<p>${l}</p>`)).join("") +
+      `<p class="summary">${summary(before, step)}</p>`;
+  }
+
   function render() {
     const step = trace.steps[index];
     $("call").innerHTML = describe(step);
+    narrate(index);
     $("step").textContent = `${index + 1} / ${trace.steps.length}`;
     $("scrub").value = index;
 
@@ -317,6 +555,7 @@
       [...s.bids, ...s.asks].flatMap((l) => l.orders.map((o) => o[1]))));
     $("meta").textContent =
       `${trace.book} book · ${trace.steps.length} messages · seed ${trace.seed} · generated by app/replay`;
+    buildHistory();
     $("scrub").max = trace.steps.length - 1;
     go(0);
   }
