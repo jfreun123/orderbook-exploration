@@ -1,18 +1,28 @@
 <!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Order Book Replay</title>
 <!--
   Plays back a trace written by app/replay (C++):
 
     ./build/app/replay --book array --messages 600 > viz/trace.json
 
+  Serve this folder over HTTP (python3 -m http.server -d viz) or pick a
+  trace file with the button. ?trace=FILE loads another trace; ?embed starts
+  with the primer collapsed, for an iframe inside a blog post.
+
   Every frame is the book's own snapshot after that call; nothing here
-  re-implements matching. Serve this folder over HTTP (for example
-  `python3 -m http.server -d viz`) or pick a trace file with the button.
+  re-implements matching. The "What just happened" story is built only from
+  the trace: the call, its fills, and the book before and after it. The book
+  view is limited to the top levels, so an order deeper than that is
+  described without its place in line. The story panel has a fixed height so
+  the ladder below it stays still from message to message; anything longer
+  scrolls inside the panel. Asks are drawn worst price first so the two best
+  prices meet in the middle of the ladder, and each row's queue runs oldest
+  (trades first) on the left to newest on the right.
 -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Order Book Replay</title>
 <style>
   :root {
     --surface: #fcfcfb;
@@ -63,6 +73,14 @@
   header { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 16px; }
   h1 { font-size: 18px; margin: 0; }
   .meta { color: var(--muted); font-size: 13px; }
+
+  .primer {
+    background: var(--panel); border-radius: 8px; padding: 10px 14px; margin: 12px 0 0;
+  }
+  .primer summary { cursor: pointer; font-weight: 600; }
+  .primer ul { margin: 8px 0 4px; padding-left: 20px; }
+  .primer li { margin: 4px 0; }
+
   .controls {
     display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
     margin: 12px 0; padding: 8px; background: var(--panel); border-radius: 8px;
@@ -89,6 +107,20 @@
 
   .layout { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 16px; }
   @media (max-width: 720px) { .layout { grid-template-columns: minmax(0, 1fr); } }
+
+  .story {
+    border-left: 4px solid var(--rule); padding: 4px 8px 4px 14px; margin: 0 0 16px;
+    height: 23em; overflow-y: auto;
+  }
+  @media (max-width: 720px) { .story { height: 30em; } }
+  .story.buy { border-left-color: var(--bid); }
+  .story.sell { border-left-color: var(--ask); }
+  .story h2 { font-size: 13px; margin: 0 0 4px; color: var(--muted); font-weight: 600; }
+  .story p { margin: 4px 0; }
+  .story ul { margin: 4px 0; padding-left: 20px; }
+  .story .summary { color: var(--muted); font-size: 13px; }
+  .tag-buy { color: var(--bid); font-weight: 600; }
+  .tag-sell { color: var(--ask); font-weight: 600; }
 
   .ladder { border-top: 1px solid var(--rule); }
   .row {
@@ -131,29 +163,6 @@
   .legend div { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
   .swatch { width: 22px; height: 14px; border-radius: 3px; flex: none; }
   .error { color: var(--ask); }
-
-  .primer {
-    background: var(--panel); border-radius: 8px; padding: 10px 14px; margin: 12px 0 0;
-  }
-  .primer summary { cursor: pointer; font-weight: 600; }
-  .primer ul { margin: 8px 0 4px; padding-left: 20px; }
-  .primer li { margin: 4px 0; }
-  .story {
-    border-left: 4px solid var(--rule); padding: 4px 8px 4px 14px; margin: 0 0 16px;
-    /* A fixed height, so the ladder below stays still from message to message.
-       Tall enough for the longest story in the default trace on a desktop;
-       anything longer scrolls inside the box. */
-    height: 23em; overflow-y: auto;
-  }
-  @media (max-width: 720px) { .story { height: 30em; } }
-  .story.buy { border-left-color: var(--bid); }
-  .story.sell { border-left-color: var(--ask); }
-  .story h2 { font-size: 13px; margin: 0 0 4px; color: var(--muted); font-weight: 600; }
-  .story p { margin: 4px 0; }
-  .story ul { margin: 4px 0; padding-left: 20px; }
-  .story .summary { color: var(--muted); font-size: 13px; }
-  .tag-buy { color: var(--bid); font-weight: 600; }
-  .tag-sell { color: var(--ask); font-weight: 600; }
 </style>
 </head>
 <body>
@@ -215,10 +224,20 @@
 <script>
 (() => {
   const $ = (id) => document.getElementById(id);
+  const params = new URLSearchParams(location.search);
   let trace = null;
   let index = 0;
   let timer = null;
   let maxQty = 1;
+  let events = new Map();
+
+  const EMPTY = { bids: [], asks: [] };
+  const stateAt = (at) => (at < 0 ? EMPTY : trace.steps[at]);
+  const person = (side) => (side === "buy" ? "buyer" : "seller");
+  const bookName = (side) => (side === "buy" ? "bid" : "ask");
+  const tag = (side, text) => `<span class="tag-${side}">${text}</span>`;
+  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  const traded = (step) => step.fills.reduce((sum, f) => sum + f[3], 0);
 
   function describe(step) {
     const args = step.call === "cancel" ? `id=${step.id}`
@@ -231,69 +250,16 @@
         ? "no such resting order: it already filled or was cancelled"
         : "rejected";
     } else {
-      const traded = step.fills.reduce((sum, f) => sum + f[3], 0);
-      const rested = restingQty(step, step.id);
+      const rested = findOrder(step, step.id)?.qty ?? 0;
       const parts = [];
-      if (step.fills.length) parts.push(`${step.fills.length} fill${step.fills.length > 1 ? "s" : ""}, ${traded} traded`);
+      if (step.fills.length) parts.push(`${plural(step.fills.length, "fill")}, ${traded(step)} traded`);
       if (step.call === "cancel") parts.push("removed from its queue");
       else if (rested > 0) parts.push(`${rested} resting`);
-      else if (step.call === "add_market" && traded < step.qty) parts.push(`${step.qty - traded} unfilled, dropped`);
+      else if (step.call === "add_market" && traded(step) < step.qty) parts.push(`${step.qty - traded(step)} unfilled, dropped`);
       note = parts.join("; ") || "nothing to trade against";
     }
     return `book.${step.call}(${args})  →  <span class="ret-${step.ok}">${step.ok}</span>   <span class="note">// ${note}</span>`;
   }
-
-  function restingQty(step, id) {
-    for (const level of [...step.bids, ...step.asks]) {
-      for (const [oid, qty] of level.orders) if (oid === id) return qty;
-    }
-    return 0;
-  }
-
-  function renderSide(container, levels, cls, makers, focusId) {
-    container.replaceChildren();
-    const depth = trace.depth;
-    // Asks are drawn worst price first so the two best prices meet in the middle.
-    const rows = cls === "ask" ? [...levels].reverse() : levels;
-    const pad = depth - rows.length;
-    if (cls === "ask") for (let i = 0; i < pad; i++) container.append(emptyRow(cls));
-    for (const level of rows) {
-      const row = document.createElement("div");
-      row.className = `row ${cls}`;
-      const price = document.createElement("div");
-      price.className = "price";
-      price.textContent = level.price;
-      const queue = document.createElement("div");
-      queue.className = "queue";
-      for (const [id, qty] of level.orders) {
-        const order = document.createElement("div");
-        order.className = "order";
-        if (id === focusId) order.classList.add("touched");
-        if (makers.has(id)) order.classList.add("maker");
-        order.style.width = `${34 + (qty / maxQty) * 46}px`;
-        order.textContent = `#${id}·${qty}`;
-        order.title = `order ${id}, ${qty} left`;
-        queue.append(order);
-      }
-      row.append(price, queue);
-      container.append(row);
-    }
-    if (cls === "bid") for (let i = 0; i < pad; i++) container.append(emptyRow(cls));
-  }
-
-  function emptyRow(cls) {
-    const row = document.createElement("div");
-    row.className = `row ${cls}`;
-    row.innerHTML = '<div class="price"></div><div class="queue"></div>';
-    return row;
-  }
-
-  // ---- Plain-English narration -------------------------------------------
-  // Built only from the trace: the call, its fills, and the book before and
-  // after it. The book view is limited to the top levels, so an order deeper
-  // than that is described without its place in line.
-
-  let events = new Map(); // id -> [{at, kind}] in message order
 
   function buildHistory() {
     events = new Map();
@@ -310,14 +276,6 @@
     });
   }
 
-  const EMPTY = { bids: [], asks: [] };
-  const stateAt = (at) => (at < 0 ? EMPTY : trace.steps[at]);
-  const person = (side) => (side === "buy" ? "buyer" : "seller");
-  const bookName = (side) => (side === "buy" ? "bid" : "ask");
-  const tag = (side, text) => `<span class="tag-${side}">${text}</span>`;
-  const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
-
-  // Where order `id` sits in a book state, or null if it is not in view.
   function findOrder(state, id) {
     for (const [side, levels] of [["buy", state.bids], ["sell", state.asks]]) {
       for (const level of levels) {
@@ -336,7 +294,6 @@
     return list[list.length - 1] || null;
   }
 
-  // The trading part of a limit or market order's story.
   function tradeStory(step, before, side, limit) {
     const other = side === "buy" ? "sell" : "buy";
     const opposite = side === "buy" ? before.asks : before.bids;
@@ -352,7 +309,6 @@
       }
       return out;
     }
-    const traded = step.fills.reduce((sum, f) => sum + f[3], 0);
     out.push(limit === null
       ? `It trades <b>immediately</b> with the ${tag(other, person(other) + "s")} already waiting, best price first:`
       : side === "buy"
@@ -370,17 +326,16 @@
           ? `The ${tag("buy", "buyer")} was willing to pay up to ${limit} and got a better deal.`
           : `The ${tag("sell", "seller")} would have accepted as little as ${limit} and got a better deal.`));
     }
-    if (traded > 1) out.push(`In total ${traded} changed hands.`);
+    if (traded(step) > 1) out.push(`In total ${traded(step)} changed hands.`);
     return out;
   }
 
-  // What happened to the rest of a limit order after trading.
   function restStory(step, side, limit) {
     const rested = findOrder(step, step.id);
-    const traded = step.fills.reduce((sum, f) => sum + f[3], 0);
-    if (traded >= step.qty) return ["The whole order was filled, so nothing is left to wait in the book."];
-    const left = step.qty - traded;
-    let text = `${traded > 0 ? `The ${left} left over` : `All ${left}`} ${left === 1 ? "waits" : "wait"} in the book as a ${tag(side, bookName(side))} at ${limit}.`;
+    const done = traded(step);
+    if (done >= step.qty) return ["The whole order was filled, so nothing is left to wait in the book."];
+    const left = step.qty - done;
+    let text = `${done > 0 ? `The ${left} left over` : `All ${left}`} ${left === 1 ? "waits" : "wait"} in the book as a ${tag(side, bookName(side))} at ${limit}.`;
     if (rested) {
       text += rested.line === 1
         ? " It is the only order at that price."
@@ -429,9 +384,43 @@
     return [`The owner of order #${step.id} asks to ${verb} it, but there is no such order in the book. The book answers <code>false</code>.`];
   }
 
+  function cancelStory(step, old) {
+    if (!old) {
+      return [`The owner of order #${step.id} cancels it, and it is removed from the book. (It was further from the middle than this view shows.)`];
+    }
+    const side = old.side;
+    const lines = [`The owner of order #${step.id} cancels it. It was a ${tag(side, bookName(side))} for ${old.qty} at ${old.price}, ${old.place === 1 ? "first in line" : `number ${old.place} in line`} at that price.`];
+    if (old.line === 1) lines.push(`It was the only order at ${old.price}, so that price disappears from the book.`);
+    else if (old.place < old.line) lines.push(`It is removed, and the ${plural(old.line - old.place, "order")} behind it each move up one place.`);
+    else lines.push("It was last in line, so nobody else moves.");
+    return lines;
+  }
+
+  function modifyStory(step, before, side, old) {
+    if (old && old.price === step.price && step.qty <= old.qty) {
+      if (step.qty === old.qty) {
+        return [`The owner of order #${step.id} sends a modify that changes nothing. It keeps its place in line.`];
+      }
+      return [`The owner of ${tag(side, bookName(side))} #${step.id} <b>shrinks</b> it from ${old.qty} to ${step.qty}, at the same price of ${step.price}.`,
+              "It <b>keeps its place in line</b>: making an order smaller can't let it cut ahead of anyone."];
+    }
+    const lines = [];
+    if (!old) {
+      lines.push(`The owner of ${tag(side, bookName(side))} #${step.id} changes it to <b>${step.qty} at ${step.price}</b>. (Its old price was further from the middle than this view shows.)`);
+    } else {
+      const why = old.price === step.price ? "it got bigger" : "its price changed";
+      lines.push(`The owner of ${tag(side, bookName(side))} #${step.id} changes it from ${old.qty} at ${old.price} to <b>${step.qty} at ${step.price}</b>.`);
+      lines.push(`Because ${why}, it <b>loses its place in line</b>: the book takes it out and treats it as a brand-new order. That's only fair to the people who were already waiting.`);
+    }
+    lines.push(...tradeStory(step, before, side, step.price));
+    lines.push(...restStory(step, side, step.price));
+    return lines;
+  }
+
   function narrate(at) {
     const step = trace.steps[at];
     const before = stateAt(at - 1);
+    const old = findOrder(before, step.id);
     let side = step.side;
     let lines = [];
 
@@ -444,44 +433,18 @@
     } else if (step.call === "add_market") {
       lines.push(`A ${tag(side, person(side))} sends a market order, #${step.id}: <b>${side} ${step.qty} right now</b>, at whatever price it takes.`);
       lines.push(...tradeStory(step, before, side, null));
-      const traded = step.fills.reduce((sum, f) => sum + f[3], 0);
-      if (traded < step.qty) {
-        lines.push(`${traded > 0 ? `That only covers ${traded}, so the other ${step.qty - traded} is` : "The whole order is"} simply dropped: a market order never waits in the book.`);
+      const done = traded(step);
+      if (done < step.qty) {
+        lines.push(`${done > 0 ? `That only covers ${done}, so the other ${step.qty - done} is` : "The whole order is"} simply dropped: a market order never waits in the book.`);
       }
     } else if (!step.ok) {
-      const old = findOrder(before, step.id);
       if (old) side = old.side;
       lines = notResting(step, at);
     } else if (step.call === "cancel") {
-      const old = findOrder(before, step.id);
-      if (old) {
-        side = old.side;
-        lines.push(`The owner of order #${step.id} cancels it. It was a ${tag(side, bookName(side))} for ${old.qty} at ${old.price}, ${old.place === 1 ? "first in line" : `number ${old.place} in line`} at that price.`);
-        if (old.line === 1) lines.push(`It was the only order at ${old.price}, so that price disappears from the book.`);
-        else if (old.place < old.line) lines.push(`It is removed, and the ${plural(old.line - old.place, "order")} behind it each move up one place.`);
-        else lines.push("It was last in line, so nobody else moves.");
-      } else {
-        lines.push(`The owner of order #${step.id} cancels it, and it is removed from the book. (It was further from the middle than this view shows.)`);
-      }
+      if (old) side = old.side;
+      lines = cancelStory(step, old);
     } else if (step.call === "modify") {
-      const old = findOrder(before, step.id);
-      if (old && old.price === step.price && step.qty <= old.qty) {
-        lines.push(step.qty === old.qty
-          ? `The owner of order #${step.id} sends a modify that changes nothing. It keeps its place in line.`
-          : `The owner of ${tag(side, bookName(side))} #${step.id} <b>shrinks</b> it from ${old.qty} to ${step.qty}, at the same price of ${step.price}.`);
-        if (step.qty !== old.qty) lines.push("It <b>keeps its place in line</b>: making an order smaller can't let it cut ahead of anyone.");
-      } else if (!old) {
-        lines.push(`The owner of ${tag(side, bookName(side))} #${step.id} changes it to <b>${step.qty} at ${step.price}</b>. (Its old price was further from the middle than this view shows.)`);
-        lines.push(...tradeStory(step, before, side, step.price));
-        lines.push(...restStory(step, side, step.price));
-      } else {
-        const from = `${old.qty} at ${old.price}`;
-        const why = old.price === step.price ? "it got bigger" : "its price changed";
-        lines.push(`The owner of ${tag(side, bookName(side))} #${step.id} changes it from ${from} to <b>${step.qty} at ${step.price}</b>.`);
-        lines.push(`Because ${why}, it <b>loses its place in line</b>: the book takes it out and treats it as a brand-new order. That's only fair to the people who were already waiting.`);
-        lines.push(...tradeStory(step, before, side, step.price));
-        lines.push(...restStory(step, side, step.price));
-      }
+      lines = modifyStory(step, before, side, old);
     }
 
     const story = $("story");
@@ -489,6 +452,69 @@
     story.innerHTML = `<h2>What just happened (message ${at + 1})</h2>` +
       lines.map((l) => (l.startsWith("<ul>") ? l : `<p>${l}</p>`)).join("") +
       `<p class="summary">${summary(before, step)}</p>`;
+  }
+
+  function emptyRow(cls) {
+    const row = document.createElement("div");
+    row.className = `row ${cls}`;
+    row.innerHTML = '<div class="price"></div><div class="queue"></div>';
+    return row;
+  }
+
+  function renderSide(container, levels, cls, makers, focusId) {
+    container.replaceChildren();
+    const rows = cls === "ask" ? [...levels].reverse() : levels;
+    const pad = trace.depth - rows.length;
+    if (cls === "ask") for (let i = 0; i < pad; i++) container.append(emptyRow(cls));
+    for (const level of rows) {
+      const row = document.createElement("div");
+      row.className = `row ${cls}`;
+      const price = document.createElement("div");
+      price.className = "price";
+      price.textContent = level.price;
+      const queue = document.createElement("div");
+      queue.className = "queue";
+      for (const [id, qty] of level.orders) {
+        const order = document.createElement("div");
+        order.className = "order";
+        if (id === focusId) order.classList.add("touched");
+        if (makers.has(id)) order.classList.add("maker");
+        order.style.width = `${34 + (qty / maxQty) * 46}px`;
+        order.textContent = `#${id}·${qty}`;
+        order.title = `order ${id}, ${qty} left`;
+        queue.append(order);
+      }
+      row.append(price, queue);
+      container.append(row);
+    }
+    if (cls === "bid") for (let i = 0; i < pad; i++) container.append(emptyRow(cls));
+  }
+
+  function renderTape() {
+    const tape = $("tape");
+    tape.replaceChildren();
+    let shown = 0;
+    for (let i = index; i >= 0 && shown < 10; i--) {
+      for (let j = trace.steps[i].fills.length - 1; j >= 0 && shown < 10; j--) {
+        const [taker, maker, price, qty] = trace.steps[i].fills[j];
+        const li = document.createElement("li");
+        if (i === index) li.className = "new";
+        li.innerHTML = `<span>${qty} @ ${price}</span><span>#${taker} ← #${maker}</span>`;
+        tape.append(li);
+        shown++;
+      }
+    }
+    if (!shown) tape.innerHTML = '<li><span class="meta">none yet</span></li>';
+  }
+
+  function renderCounts() {
+    const counts = { add_limit: 0, add_market: 0, cancel: 0, modify: 0, fills: 0 };
+    for (let i = 0; i <= index; i++) {
+      counts[trace.steps[i].call]++;
+      counts.fills += trace.steps[i].fills.length;
+    }
+    $("counts").innerHTML = Object.entries(counts)
+      .map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
   }
 
   function render() {
@@ -505,35 +531,12 @@
 
     const bid = step.bids[0]?.price;
     const ask = step.asks[0]?.price;
-    const spread = $("spread").children;
-    spread[0].textContent = "";
-    spread[1].textContent = bid !== undefined && ask !== undefined
+    $("spread").children[1].textContent = bid !== undefined && ask !== undefined
       ? `spread ${ask - bid} · ${step.resting} orders resting`
       : `one side empty · ${step.resting} orders resting`;
 
-    // The last ten trades up to this step, newest first.
-    const tape = $("tape");
-    tape.replaceChildren();
-    let shown = 0;
-    for (let i = index; i >= 0 && shown < 10; i--) {
-      for (let j = trace.steps[i].fills.length - 1; j >= 0 && shown < 10; j--) {
-        const [taker, maker, price, qty] = trace.steps[i].fills[j];
-        const li = document.createElement("li");
-        if (i === index) li.className = "new";
-        li.innerHTML = `<span>${qty} @ ${price}</span><span>#${taker} ← #${maker}</span>`;
-        tape.append(li);
-        shown++;
-      }
-    }
-    if (!shown) tape.innerHTML = '<li><span class="meta">none yet</span></li>';
-
-    const counts = { add_limit: 0, add_market: 0, cancel: 0, modify: 0, fills: 0 };
-    for (let i = 0; i <= index; i++) {
-      counts[trace.steps[i].call]++;
-      counts.fills += trace.steps[i].fills.length;
-    }
-    $("counts").innerHTML = Object.entries(counts)
-      .map(([k, v]) => `<span>${k}</span><span>${v}</span>`).join("");
+    renderTape();
+    renderCounts();
   }
 
   function go(to) {
@@ -557,9 +560,9 @@
     trace = data;
     maxQty = Math.max(1, ...trace.steps.flatMap((s) =>
       [...s.bids, ...s.asks].flatMap((l) => l.orders.map((o) => o[1]))));
+    buildHistory();
     $("meta").textContent =
       `${trace.book} book · ${trace.steps.length} messages · seed ${trace.seed} · generated by app/replay`;
-    buildHistory();
     $("scrub").max = trace.steps.length - 1;
     go(0);
   }
@@ -580,7 +583,8 @@
     else if (e.key === " ") { e.preventDefault(); play(!timer); }
   });
 
-  const source = new URLSearchParams(location.search).get("trace") || "trace.json";
+  if (params.has("embed")) $("primer").open = false;
+  const source = params.get("trace") || "trace.json";
   fetch(source)
     .then((r) => { if (!r.ok) throw new Error(`${source}: HTTP ${r.status}`); return r.json(); })
     .then(load)

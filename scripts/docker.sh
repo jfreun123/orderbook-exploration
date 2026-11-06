@@ -7,6 +7,10 @@
 #
 # Arguments before a `--` go to `docker run`, so every setting a measurement
 # depends on is spelled out on the command line that ran it.
+#
+# The container runs as the calling user, so build output in the mounted repo
+# is not owned by root. That user has no home directory in the image, and git
+# wants one, so HOME is set to /tmp.
 set -euo pipefail
 
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
@@ -30,8 +34,6 @@ if [[ -t 0 && -t 1 ]]; then
   run_flags+=(--interactive --tty)
 fi
 
-# Run as the calling user so build output in the mounted repo is not owned by
-# root. That user has no home directory in the image, and git wants one.
 exec docker run --rm --init \
   --user "$(id -u):$(id -g)" --env HOME=/tmp \
   --volume "$root:/work" --workdir /work \

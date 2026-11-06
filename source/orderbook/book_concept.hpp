@@ -1,18 +1,17 @@
 #pragma once
 
-// orderbook
+// What every order-by-order book in this repo can do. The rules behind each
+// call are written down in docs/matching-rules.md, and
+// test/source/book_test.cpp checks every book against them.
+
 #include "orderbook/types.hpp"
 
-// std
 #include <concepts>
 #include <cstddef>
 #include <optional>
 
 namespace ob {
 
-// What every book in this repo can do. The rules behind each call are written
-// down in docs/matching-rules.md, and test/source/book_test.cpp checks every
-// book against them.
 template <class Book>
 concept OrderBook =
     requires(Book book, const Book cbook, OrderId id, Side side, Price price,

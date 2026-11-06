@@ -1,23 +1,25 @@
 #pragma once
 
-// A book for one instrument whose prices fall in a known range of ticks.
+// A book for one instrument whose prices fall in a known range of ticks,
+// [0, max_price). An order priced outside it is rejected.
 //
-// - Each side is an array with one slot per tick, so finding a price level is
-//   an index: no search at all.
-// - Orders live in an OrderPool: pooled nodes, an intrusive list per price,
-//   and an id index (see order_pool.hpp).
-// - The best bid and best ask are cached. When a best level empties, the book
-//   walks the array to the next non-empty tick; in a busy book that is
-//   usually a tick or two away.
+// Each side is an array with one slot per tick, so finding a price level is
+// an index: no search at all. Orders live in an OrderPool: pooled nodes, an
+// intrusive list per price, and an id index.
 //
-// The price range is fixed when the book is built: an order priced outside
-// [0, max_price) is rejected.
+// The best bid and best ask are cached, as -1 and max_price while that side
+// is empty. When a best level empties, remove() walks the array to the next
+// non-empty tick, which in a busy book is usually a tick or two away.
+// match() stops at the edge of the array through in_range(), so a market
+// order's extreme limit never reads past it.
+//
+// modify keeps the order's place in the queue only when it shrinks at the
+// same price. Any other change pulls the order and sends it again as a new
+// arrival (docs/matching-rules.md).
 
-// orderbook
 #include "orderbook/order_pool.hpp"
 #include "orderbook/types.hpp"
 
-// std
 #include <algorithm>
 #include <cstddef>
 #include <optional>
@@ -46,9 +48,7 @@ public:
     if (qty <= 0) {
       return false;
     }
-    // Whatever cannot be filled is dropped, never rested. The most a buyer
-    // could have to pay is the top of the range, and a seller the bottom.
-    match(id, side, side == Side::Buy ? max_price_ - 1 : 0, qty, fills);
+    match(id, side, market_limit(side), qty, fills);
     return true;
   }
 
@@ -67,8 +67,6 @@ public:
       return false;
     }
     OrderPool::Node &order = pool_[node];
-    // Shrinking in place keeps the order's place in the queue. Anything else
-    // loses it: the order is pulled and sent again as a new arrival.
     if (price == order.price && qty <= order.qty) {
       order.qty = qty;
       return true;
@@ -119,8 +117,6 @@ private:
 
   Levels &levels_of(Side side) { return side == Side::Buy ? bids_ : asks_; }
 
-  // Trades against the other side while its best price crosses `limit`, and
-  // returns what is left.
   Qty match(OrderId id, Side side, Price limit, Qty qty, Fills &fills) {
     const Levels &levels = levels_of(opposite(side));
     const Price &best = side == Side::Buy ? best_ask_ : best_bid_;
@@ -135,7 +131,7 @@ private:
       maker.qty -= traded;
       qty -= traded;
       if (maker.qty == 0) {
-        remove(head); // moves `best` on if the level empties
+        remove(head);
       }
     }
     return qty;
@@ -150,8 +146,6 @@ private:
     }
   }
 
-  // Takes an order out of the book. If that empties the best level, walks
-  // outward to the next one.
   void remove(Index node) {
     const Side side = pool_[node].side;
     const Price price = pool_[node].price;
@@ -174,8 +168,8 @@ private:
   Price max_price_;
   Levels bids_;
   Levels asks_;
-  Price best_bid_ = -1; // -1: no bids
-  Price best_ask_;      // max_price_: no asks
+  Price best_bid_ = -1;
+  Price best_ask_;
   OrderPool pool_;
 };
 

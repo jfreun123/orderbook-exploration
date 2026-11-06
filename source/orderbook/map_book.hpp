@@ -3,15 +3,22 @@
 // The textbook book: a sorted map from price to the queue of orders resting
 // at that price, plus a hash map from order id to where the order lives.
 //
+// Both maps keep the best price at begin(): bids sort descending, asks
+// ascending. Each level is a std::list with the oldest order at the front,
+// so it trades first, and the index holds list iterators, which std::list
+// keeps valid until the order is erased.
+//
 // Compared to NaiveBook, finding a price level is O(log levels) instead of a
 // scan of every order, and cancel goes straight to the order through the
 // index. The cost is a heap allocation for every map node and list node, and
 // a pointer chase for every step through either.
+//
+// modify keeps the order's place in the queue only when it shrinks at the
+// same price. Any other change pulls the order and sends it again as a new
+// arrival (docs/matching-rules.md).
 
-// orderbook
 #include "orderbook/types.hpp"
 
-// std
 #include <algorithm>
 #include <cstddef>
 #include <functional>
@@ -30,11 +37,9 @@ public:
     if (qty <= 0 || index_.contains(id)) {
       return false;
     }
-    qty = side == Side::Buy ? match(id, side, price, qty, asks_, fills)
-                            : match(id, side, price, qty, bids_, fills);
+    qty = match(id, side, price, qty, fills);
     if (qty > 0) {
-      side == Side::Buy ? rest(bids_, id, side, price, qty)
-                        : rest(asks_, id, side, price, qty);
+      rest(id, side, price, qty);
     }
     return true;
   }
@@ -43,9 +48,7 @@ public:
     if (qty <= 0) {
       return false;
     }
-    // Whatever cannot be filled is dropped, never rested.
-    side == Side::Buy ? match_any(id, qty, asks_, fills)
-                      : match_any(id, qty, bids_, fills);
+    match(id, side, market_limit(side), qty, fills);
     return true;
   }
 
@@ -54,9 +57,13 @@ public:
     if (found == index_.end()) {
       return false;
     }
-    const auto order = found->second;
+    const Level::iterator order = found->second;
     index_.erase(found);
-    order->side == Side::Buy ? unlink(bids_, order) : unlink(asks_, order);
+    if (order->side == Side::Buy) {
+      unlink(bids_, order);
+    } else {
+      unlink(asks_, order);
+    }
     return true;
   }
 
@@ -65,9 +72,7 @@ public:
     if (found == index_.end() || qty <= 0) {
       return false;
     }
-    auto order = found->second;
-    // Shrinking in place keeps the order's place in the queue. Anything else
-    // loses it: the order is pulled and sent again as a new arrival.
+    const Level::iterator order = found->second;
     if (price == order->price && qty <= order->qty) {
       order->qty = qty;
       return true;
@@ -94,52 +99,42 @@ private:
     Qty qty;
   };
 
-  using Level = std::list<Order>; // front is the oldest: it trades first
-  // Both maps keep the best price at begin(): the highest bid, the lowest ask.
+  using Level = std::list<Order>;
   using Bids = std::map<Price, Level, std::greater<>>;
   using Asks = std::map<Price, Level, std::less<>>;
 
-  // Trades against `levels` while its best price crosses `limit`, and returns
-  // what is left.
+  Qty match(OrderId id, Side side, Price limit, Qty qty, Fills &fills) {
+    return side == Side::Buy ? match(id, side, limit, qty, asks_, fills)
+                             : match(id, side, limit, qty, bids_, fills);
+  }
+
   template <class Levels>
   Qty match(OrderId id, Side side, Price limit, Qty qty, Levels &levels,
             Fills &fills) {
     while (qty > 0 && !levels.empty() &&
            crosses(side, limit, levels.begin()->first)) {
-      qty = trade_at_best(id, qty, levels, fills);
+      auto level = levels.begin();
+      Order &maker = level->second.front();
+      const Qty traded = std::min(qty, maker.qty);
+      fills.push_back({.taker = id,
+                       .maker = maker.id,
+                       .price = maker.price,
+                       .qty = traded});
+      maker.qty -= traded;
+      qty -= traded;
+      if (maker.qty == 0) {
+        index_.erase(maker.id);
+        level->second.pop_front();
+        if (level->second.empty()) {
+          levels.erase(level);
+        }
+      }
     }
     return qty;
   }
 
-  template <class Levels>
-  void match_any(OrderId id, Qty qty, Levels &levels, Fills &fills) {
-    while (qty > 0 && !levels.empty()) {
-      qty = trade_at_best(id, qty, levels, fills);
-    }
-  }
-
-  // Trades with the oldest order at the best price.
-  template <class Levels>
-  Qty trade_at_best(OrderId id, Qty qty, Levels &levels, Fills &fills) {
-    auto level = levels.begin();
-    Order &maker = level->second.front();
-    const Qty traded = std::min(qty, maker.qty);
-    fills.push_back(
-        {.taker = id, .maker = maker.id, .price = maker.price, .qty = traded});
-    maker.qty -= traded;
-    if (maker.qty == 0) {
-      index_.erase(maker.id);
-      level->second.pop_front();
-      if (level->second.empty()) {
-        levels.erase(level);
-      }
-    }
-    return qty - traded;
-  }
-
-  template <class Levels>
-  void rest(Levels &levels, OrderId id, Side side, Price price, Qty qty) {
-    Level &level = levels[price];
+  void rest(OrderId id, Side side, Price price, Qty qty) {
+    Level &level = side == Side::Buy ? bids_[price] : asks_[price];
     level.push_back({.id = id, .side = side, .price = price, .qty = qty});
     index_.emplace(id, std::prev(level.end()));
   }

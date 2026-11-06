@@ -1,0 +1,8 @@
+timer floor: 11.7 ns (median of an empty measurement)
+map scattered orders=10000 messages=300000 evict_kb=4096 resting_at_end=6014
+op              count    p50    p90    p99   p99.9      max
+add_limit      134942    600   1557   3536   13630   133249
+add_market      14951    848   1809   3184   13891   211350
+cancel         120136    311   1682   2782   12227   257122
+modify          29971    312   2081   3900   14361    77777
+all            300000    573   1683   3294   13321   257122

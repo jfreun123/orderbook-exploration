@@ -1,8 +1,8 @@
-timer floor: 11.7 ns (median of an empty measurement)
-map fresh orders=10000 messages=2000000 resting_at_end=17776
+timer floor: 11.6 ns (median of an empty measurement)
+map fresh orders=10000 messages=2000000 evict_kb=0 resting_at_end=17776
 op              count    p50    p90    p99   p99.9      max
-add_limit      900265     63    105    174     315   409066
-add_market      99939     63    121    197     314    50229
-cancel         800297     42     95    143     244    75861
-modify         199499     44    137    219     337    77790
-all           2000000     56    103    176     293   409066
+add_limit      900265     64    104    180     367   156657
+add_market      99939     60    117    201     358    61098
+cancel         800297     41     95    158     305   141438
+modify         199499     44    137    226     384    99516
+all           2000000     55    103    183     344   156657

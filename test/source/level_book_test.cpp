@@ -1,7 +1,9 @@
-// The market-by-price books against each other and against simple cases.
+// The market-by-price books on a hand-written case, then against each other
+// on 200,000 generated level updates: the same best prices after every
+// update and the same full ladder every thousand.
 
-#include "orderbook/flow.hpp"
 #include "orderbook/level_book.hpp"
+#include "orderbook/level_flow.hpp"
 
 #include <gtest/gtest.h>
 

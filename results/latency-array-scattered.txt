@@ -1,8 +1,8 @@
-timer floor: 11.7 ns (median of an empty measurement)
-array scattered orders=10000 messages=2000000 resting_at_end=17776
+timer floor: 11.8 ns (median of an empty measurement)
+array scattered orders=10000 messages=2000000 evict_kb=0 resting_at_end=17776
 op              count    p50    p90    p99   p99.9      max
-add_limit      900265     49    183    421     929  1779339
-add_market      99939     81    202    395     691  1109993
-cancel         800297     69    183    301     461  1210127
-modify         199499     75    210    388     653    86004
-all           2000000     56    187    370     841  1779339
+add_limit      900265     49    212    517    1199  1844763
+add_market      99939     84    237    476     791  1198723
+cancel         800297     74    211    369     597  1281931
+modify         199499     81    241    473     777    67786
+all           2000000     55    216    453    1069  1844763

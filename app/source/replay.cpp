@@ -1,19 +1,22 @@
-// Replays a generated message stream through one book and writes a JSON trace
-// of every step: the call made, what the book answered, the trades it
-// produced, and the top of the book afterwards. viz/index.html plays it back.
+// Replays a generated message stream through one book and writes a JSON
+// trace of every step to stdout: the call made, what the book answered, the
+// trades it produced, and the top of the book afterwards. viz/index.html
+// plays it back.
 //
-//   ./build/app/replay --book array --messages 400 --orders 40 > viz/trace.json
+//   replay [--book naive|map|vector|array] [--seed N] [--messages N]
+//          [--orders N] [--spread TICKS] [--depth LEVELS] > viz/trace.json
 //
-// Every option has a default; see `usage` below.
+// Every option has a default, in Options. Prices run from 0 to 200 around a
+// mid of 100 so the ladder stays readable, --orders is the stream's
+// target_orders, and --depth is how many price levels a side of each
+// snapshot shows.
 
-// orderbook
 #include "orderbook/array_book.hpp"
 #include "orderbook/flow.hpp"
 #include "orderbook/map_book.hpp"
 #include "orderbook/naive_book.hpp"
 #include "orderbook/vector_book.hpp"
 
-// std
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -35,7 +38,7 @@ struct Options {
   std::string book = "array";
   std::uint64_t seed = 7;
   std::size_t messages = 400;
-  std::size_t orders = 40; // FlowConfig::target_orders
+  std::size_t orders = 40;
   ob::Price spread = 8;
   std::size_t depth = 8;
 };
@@ -71,7 +74,7 @@ std::string_view side_name(ob::Side side) {
   return side == ob::Side::Buy ? "buy" : "sell";
 }
 
-std::string_view type_name(ob::EventType type) {
+std::string_view call_name(ob::EventType type) {
   switch (type) {
   case ob::EventType::Limit:
     return "add_limit";
@@ -85,10 +88,19 @@ std::string_view type_name(ob::EventType type) {
   return "?";
 }
 
+std::string fills_json(const ob::Fills &fills) {
+  std::string out = "[";
+  for (std::size_t i = 0; i < fills.size(); ++i) {
+    out += std::format("{}[{},{},{},{}]", i == 0 ? "" : ",", fills[i].taker,
+                       fills[i].maker, fills[i].price, fills[i].qty);
+  }
+  return out + "]";
+}
+
 std::string levels_json(const std::vector<ob::LevelView> &levels) {
   std::string out = "[";
   for (std::size_t i = 0; i < levels.size(); ++i) {
-    out += std::format("{}{{\"price\":{},\"orders\":[", i == 0 ? "" : ",",
+    out += std::format(R"({}{{"price":{},"orders":[)", i == 0 ? "" : ",",
                        levels[i].price);
     for (std::size_t j = 0; j < levels[i].orders.size(); ++j) {
       out += std::format("{}[{},{}]", j == 0 ? "" : ",", levels[i].orders[j].id,
@@ -104,31 +116,23 @@ void replay(Book book, const Options &options, const ob::FlowConfig &config) {
   ob::Flow flow{config};
   ob::Fills fills;
   std::cout << std::format(
-      "{{\"book\":\"{}\",\"seed\":{},\"orders\":{},\"spread\":{},"
-      "\"depth\":{},\"steps\":[\n",
+      R"({{"book":"{}","seed":{},"orders":{},"spread":{},"depth":{},"steps":[)"
+      "\n",
       options.book, options.seed, options.orders, options.spread,
       options.depth);
   for (std::size_t i = 0; i < options.messages; ++i) {
     const ob::Event event = flow.next();
     fills.clear();
     const bool accepted = ob::apply(book, event, fills);
-
-    std::string fills_json = "[";
-    for (std::size_t j = 0; j < fills.size(); ++j) {
-      fills_json +=
-          std::format("{}[{},{},{},{}]", j == 0 ? "" : ",", fills[j].taker,
-                      fills[j].maker, fills[j].price, fills[j].qty);
-    }
-    fills_json += "]";
-
     const ob::Snapshot snap = book.snapshot(options.depth);
     std::cout << std::format(
-        "{}{{\"call\":\"{}\",\"id\":{},\"side\":\"{}\",\"price\":{},"
-        "\"qty\":{},\"ok\":{},\"fills\":{},\"resting\":{},"
-        "\"bids\":{},\"asks\":{}}}\n",
-        i == 0 ? "" : ",", type_name(event.type), event.id,
-        side_name(event.side), event.price, event.qty, accepted, fills_json,
-        book.order_count(), levels_json(snap.bids), levels_json(snap.asks));
+        R"({}{{"call":"{}","id":{},"side":"{}","price":{},"qty":{},"ok":{},)"
+        R"("fills":{},"resting":{},"bids":{},"asks":{}}})"
+        "\n",
+        i == 0 ? "" : ",", call_name(event.type), event.id,
+        side_name(event.side), event.price, event.qty, accepted,
+        fills_json(fills), book.order_count(), levels_json(snap.bids),
+        levels_json(snap.asks));
   }
   std::cout << "]}\n";
 }

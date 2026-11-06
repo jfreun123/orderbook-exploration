@@ -2,20 +2,29 @@
 
 // Market-by-price books: each side is only price -> total quantity at that
 // price, with no individual orders, ids or queues. This is the book from
-// David Gross's CppCon 2024 talk ("AddOrder(Side, Price, Volume)"), and the
-// kind of book a market data feed publishes level by level.
+// David Gross's CppCon 2024 talk (AddOrder(Side, Price, Volume)), and the
+// kind of book a market data feed publishes level by level. With no
+// per-order work, finding the price level is nearly the whole cost of an
+// update, so this is where std::map and a sorted vector differ most.
 //
-// With no per-order work, finding the price level is nearly the whole cost
-// of an update, so this is where std::map and a sorted vector differ most.
+// update(side, price, delta) adds delta (which may be negative) to the
+// quantity at price. A level is created when quantity first arrives and
+// erased when it reaches zero; callers never take a level below zero.
+// levels(side) returns every level on that side, best first.
 //
-// update(side, price, delta) adds `delta` (which may be negative) to the
-// quantity at `price`. A level is created when quantity first arrives and
-// erased when it reaches zero. Callers never take a level below zero.
+// MapLevelBook keeps each side in a std::map with the best price at begin():
+// bids sort descending, asks ascending.
+//
+// VectorLevelBook is Gross's "reverse vector": levels sorted worst to best,
+// so the best price is at the back, where nearly all updates land and an
+// insert or erase shifts only the few levels behind it. position() returns
+// the level at the price, or where it would be inserted. Search::Linear
+// scans for it from the back, which wins when the target is usually in the
+// last few slots; Search::Binary is std::partition_point over the whole
+// vector, for comparison.
 
-// orderbook
 #include "orderbook/types.hpp"
 
-// std
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -33,13 +42,16 @@ using LevelQty = std::pair<Price, Qty>;
 class MapLevelBook {
 public:
   void update(Side side, Price price, Qty delta) {
-    side == Side::Buy ? apply(bids_, price, delta) : apply(asks_, price, delta);
+    if (side == Side::Buy) {
+      apply(bids_, price, delta);
+    } else {
+      apply(asks_, price, delta);
+    }
   }
 
   [[nodiscard]] std::optional<Price> best_bid() const { return best(bids_); }
   [[nodiscard]] std::optional<Price> best_ask() const { return best(asks_); }
 
-  // Every level on one side, best first.
   [[nodiscard]] std::vector<LevelQty> levels(Side side) const {
     return side == Side::Buy
                ? std::vector<LevelQty>(bids_.begin(), bids_.end())
@@ -61,19 +73,12 @@ private:
     return levels.empty() ? std::nullopt : std::optional(levels.begin()->first);
   }
 
-  std::map<Price, Qty, std::greater<>> bids_; // best (highest) first
-  std::map<Price, Qty, std::less<>> asks_;    // best (lowest) first
+  std::map<Price, Qty, std::greater<>> bids_;
+  std::map<Price, Qty, std::less<>> asks_;
 };
 
 enum class Search : std::uint8_t { Linear, Binary };
 
-// Gross's "reverse vector": levels sorted worst to best, so the best price
-// is at the back, where nearly all updates land and an insert or erase
-// shifts only the few levels behind it.
-//
-// Search::Linear scans from the back, which wins when the target is usually
-// in the last few slots. Search::Binary is std::lower_bound over the whole
-// vector, for comparison.
 template <Search kSearch> class VectorLevelBook {
 public:
   void update(Side side, Price price, Qty delta) {
@@ -100,8 +105,6 @@ public:
 private:
   using Levels = std::vector<LevelQty>;
 
-  // The first level, from the front, that is not worse than `price`: either
-  // `price` itself or where it would be inserted.
   static Levels::iterator position(Levels &levels, Side side, Price price) {
     if constexpr (kSearch == Search::Linear) {
       auto it = levels.end();

@@ -9,10 +9,10 @@
 // left over rests in the backlog. Return the total amount left in the backlog
 // after every order, modulo 1e9 + 7.
 //
-// The solution below is the submission as written for LeetCode, kept in its
-// format (class Solution, vector<vector<int>>).
+// The class below is the submission as written for LeetCode, kept verbatim
+// with its own formatting and comments, which is why clang-format is turned
+// off around it.
 
-// std
 #include <algorithm>
 #include <functional>
 #include <map>

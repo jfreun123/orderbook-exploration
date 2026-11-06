@@ -1,8 +1,8 @@
 timer floor: 11.7 ns (median of an empty measurement)
-vector fresh orders=10000 messages=2000000 resting_at_end=17776
+vector fresh orders=10000 messages=2000000 evict_kb=0 resting_at_end=17776
 op              count    p50    p90    p99   p99.9      max
-add_limit      900265     63    101    155     268   180660
-add_market      99939     51     96    157     275    18490
-cancel         800297     37     95    176     279    85943
-modify         199499     41    140    238     359    60839
-all           2000000     50    101    179     292   180660
+add_limit      900265     60     97    160     321   239390
+add_market      99939     55    103    171     354    37463
+cancel         800297     38     97    183     313    69255
+modify         199499     42    138    241     384    32891
+all           2000000     50    100    185     330   239390

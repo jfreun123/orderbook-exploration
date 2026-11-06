@@ -14,7 +14,7 @@ build=${OB_BUILD_DIR:-build-bench}
 out=results
 mkdir -p "$out"
 
-run() { # name book extra-args...
+run() {
   local name=$1 book=$2
   shift 2
   "$build/benchmark/latency" "$book" --levels 1000 "$@" \

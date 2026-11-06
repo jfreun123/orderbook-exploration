@@ -1,15 +1,23 @@
 #pragma once
 
 // The slow, obvious book, shaped like the LeetCode solution: each side is one
-// container of orders kept in priority order, and the best order is always at
-// the back. Unlike the LeetCode heaps it keeps arrival order within a price,
-// and it can find an order by id, so it supports cancel and modify. Both of
-// those are linear scans, and every insert shifts the orders behind it.
+// vector of orders kept in priority order, worst first and best last, so the
+// next order to trade is at the back.
+//
+// Unlike the LeetCode solution it keeps arrival order within a price and can
+// find an order by id, so it supports cancel and modify. Every find is a
+// linear scan of both sides, and every insert shifts the orders behind it.
+//
+// A new order rests behind every order at its own price or better, which in
+// a worst-to-best vector means just in front of them: rest() inserts at the
+// first order the new one is not better than.
+//
+// modify keeps the order's place in the queue only when it shrinks at the
+// same price. Any other change pulls the order and sends it again as a new
+// arrival (docs/matching-rules.md).
 
-// orderbook
 #include "orderbook/types.hpp"
 
-// std
 #include <algorithm>
 #include <cstddef>
 #include <optional>
@@ -25,7 +33,7 @@ public:
     }
     qty = match(id, side, price, qty, fills);
     if (qty > 0) {
-      rest(Order{.id = id, .side = side, .price = price, .qty = qty});
+      rest({.id = id, .side = side, .price = price, .qty = qty});
     }
     return true;
   }
@@ -34,13 +42,12 @@ public:
     if (qty <= 0) {
       return false;
     }
-    // Whatever cannot be filled is dropped, never rested.
-    match_any_price(id, side, qty, fills);
+    match(id, side, market_limit(side), qty, fills);
     return true;
   }
 
   bool cancel(OrderId id) {
-    for (auto *orders : {&bids_, &asks_}) {
+    for (Orders *orders : {&bids_, &asks_}) {
       auto it = std::ranges::find(*orders, id, &Order::id);
       if (it != orders->end()) {
         orders->erase(it);
@@ -55,8 +62,6 @@ public:
     if (order == nullptr || qty <= 0) {
       return false;
     }
-    // Shrinking an order in place keeps its place in the queue. Anything else
-    // loses it: the order is pulled and sent again as a new arrival.
     if (price == order->price && qty <= order->qty) {
       order->qty = qty;
       return true;
@@ -85,13 +90,12 @@ private:
     Qty qty;
   };
 
-  // Worst first, best last, so the next order to trade is a pop_back away.
   using Orders = std::vector<Order>;
 
   Orders &side_of(Side side) { return side == Side::Buy ? bids_ : asks_; }
 
   Order *find(OrderId id) {
-    for (auto *orders : {&bids_, &asks_}) {
+    for (Orders *orders : {&bids_, &asks_}) {
       auto it = std::ranges::find(*orders, id, &Order::id);
       if (it != orders->end()) {
         return &*it;
@@ -100,38 +104,25 @@ private:
     return nullptr;
   }
 
-  // Trades `qty` against the other side while its best price crosses `limit`,
-  // and returns what is left.
   Qty match(OrderId id, Side side, Price limit, Qty qty, Fills &fills) {
     Orders &resting = side_of(opposite(side));
     while (qty > 0 && !resting.empty() &&
            crosses(side, limit, resting.back().price)) {
-      qty = trade(id, resting, qty, fills);
+      Order &maker = resting.back();
+      const Qty traded = std::min(qty, maker.qty);
+      fills.push_back({.taker = id,
+                       .maker = maker.id,
+                       .price = maker.price,
+                       .qty = traded});
+      maker.qty -= traded;
+      qty -= traded;
+      if (maker.qty == 0) {
+        resting.pop_back();
+      }
     }
     return qty;
   }
 
-  void match_any_price(OrderId id, Side side, Qty qty, Fills &fills) {
-    Orders &resting = side_of(opposite(side));
-    while (qty > 0 && !resting.empty()) {
-      qty = trade(id, resting, qty, fills);
-    }
-  }
-
-  static Qty trade(OrderId id, Orders &resting, Qty qty, Fills &fills) {
-    Order &maker = resting.back();
-    const Qty traded = std::min(qty, maker.qty);
-    fills.push_back(
-        {.taker = id, .maker = maker.id, .price = maker.price, .qty = traded});
-    maker.qty -= traded;
-    if (maker.qty == 0) {
-      resting.pop_back();
-    }
-    return qty - traded;
-  }
-
-  // A new order goes behind every order at its own price or better, which is
-  // in front of them in this worst-to-best vector.
   void rest(const Order &order) {
     Orders &orders = side_of(order.side);
     auto pos = std::ranges::partition_point(orders, [&](const Order &other) {

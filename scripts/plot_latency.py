@@ -3,11 +3,16 @@
 
     scripts/plot_latency.py OUT.png TITLE CSV [CSV ...]
 
-Each CSV becomes one series, labelled "<book> (<variant>)". Bars cover 0
-to MAX_NS (environment variable, default 200) in 200 buckets, overlaid, with a dashed line at each median, in
-the style of the latency chart in David Gross's CppCon 2024 talk.
-Anything slower than MAX_NS still counts towards the median; the share of
-messages past the edge of the chart is printed in the legend.
+Each CSV becomes one series, labelled "<book> (<variant>)", with a dashed
+line at its median, in the style of the latency chart in David Gross's
+CppCon 2024 talk. The x axis runs from 0 to MAX_NS (an environment
+variable, default 200) in 200 buckets. Anything slower than MAX_NS still
+counts towards the median, and the share of messages past the edge of the
+chart is printed in the legend.
+
+The series colours are the first three categorical slots of a palette
+checked for colour-blind separation; text stays in ink colours, and the
+series colour only marks the bars and the median line.
 """
 
 import csv
@@ -20,8 +25,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-# Categorical slots 1-3, checked for colorblind separation. Text stays in ink
-# colours; the series colour only marks the bars and the median lines.
 COLORS = ["#2a78d6", "#eb6834", "#1baf7a"]
 INK = "#1f1f1e"
 MUTED = "#6b6a63"
@@ -59,11 +62,11 @@ def main():
     fig, ax = plt.subplots(figsize=(10, 5.6), dpi=150)
     fig.patch.set_facecolor(SURFACE)
     ax.set_facecolor(SURFACE)
+    width = max(1, MAX_NS // BUCKETS)
 
     for path, color in zip(paths, COLORS):
         label, counts = load(path)
         total = sum(counts.values())
-        width = max(1, MAX_NS // BUCKETS)
         binned = defaultdict(int)
         for ns, count in counts.items():
             if ns <= MAX_NS:
@@ -72,13 +75,15 @@ def main():
         ys = [binned.get(x, 0) / total * 100 for x in xs]
         past = sum(c for ns, c in counts.items() if ns > MAX_NS) / total * 100
         med = median(counts)
-        ax.bar(xs, ys, width=width, align="edge", color=color, alpha=0.45, linewidth=0,
+        ax.bar(xs, ys, width=width, align="edge", color=color, alpha=0.45,
+               linewidth=0,
                label=f"{label}: median {med} ns, {past:.1f}% past {MAX_NS} ns")
         ax.axvline(med, color=color, linestyle="--", linewidth=2)
 
     ax.set_title(title, color=INK, fontsize=14, loc="left")
     ax.set_xlabel("Latency per message (ns)", color=INK)
-    ax.set_ylabel(f"Share of messages per {width} ns (%)" if width > 1 else "Share of messages (%)", color=INK)
+    ax.set_ylabel(f"Share of messages per {width} ns (%)" if width > 1
+                  else "Share of messages (%)", color=INK)
     ax.set_xlim(0, MAX_NS)
     ax.set_ylim(bottom=0)
     ax.tick_params(colors=MUTED)

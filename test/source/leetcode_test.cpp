@@ -1,3 +1,6 @@
+// The LeetCode solution on the problem's two examples, on a book that never
+// crosses, and on an order that sweeps several levels.
+
 #include "orderbook/leetcode_backlog.hpp"
 
 #include <gtest/gtest.h>
@@ -26,7 +29,6 @@ TEST(LeetcodeBacklog, NothingCrosses) {
 }
 
 TEST(LeetcodeBacklog, SweepsSeveralLevels) {
-  // The sell for 10 at 9 takes 2 at 11 and 3 at 10, then rests 5 at 9.
   EXPECT_EQ(backlog({{11, 2, 0}, {10, 3, 0}, {8, 4, 0}, {9, 10, 1}}), 9);
 }
 

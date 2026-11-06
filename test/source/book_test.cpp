@@ -1,4 +1,6 @@
-// Every rule in docs/matching-rules.md, checked against every book.
+// Every rule in docs/matching-rules.md, checked against every order-by-order
+// book through one typed test suite. ArrayBook needs a price range, so
+// make_book() builds it with one wide enough for every case here.
 
 #include "orderbook/array_book.hpp"
 #include "orderbook/book_concept.hpp"
@@ -28,8 +30,8 @@ template <> ob::ArrayBook make_book<ob::ArrayBook>() {
 
 template <class Book> class BookTest : public testing::Test {
 protected:
-  Book book = make_book<Book>(); // NOLINT(*-non-private-member-*)
-  Fills fills;                   // NOLINT(*-non-private-member-*)
+  Book book = make_book<Book>();
+  Fills fills;
 
   bool buy(ob::OrderId id, ob::Price price, ob::Qty qty) {
     return book.add_limit(id, Side::Buy, price, qty, fills);
@@ -65,7 +67,6 @@ TYPED_TEST(BookTest, SamePriceTradesOldestFirst) {
   this->buy(2, 100, 5);
   this->sell(3, 100, 7);
   EXPECT_EQ(this->fills, (Fills{{3, 1, 100, 5}, {3, 2, 100, 2}}));
-  // Order 2 keeps the front of the queue with what is left of it.
   EXPECT_EQ(this->book.snapshot(1).bids[0].orders,
             (std::vector<ob::RestingOrder>{{2, 3}}));
 }

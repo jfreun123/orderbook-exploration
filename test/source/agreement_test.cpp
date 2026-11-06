@@ -1,5 +1,9 @@
-// Feeds the same generated message stream to every book and checks that they
-// answer every message the same way and end every step in the same state.
+// Feeds the same generated message stream to every order-by-order book and
+// checks that they answer every message the same way and end every step in
+// the same state: the same fills, best prices and order count after every
+// message, and the same top-20 snapshot every thousand. NaiveBook is the
+// reference. The last check makes sure the stream exercised matching, not
+// just built a book.
 
 #include "orderbook/array_book.hpp"
 #include "orderbook/flow.hpp"
@@ -63,7 +67,6 @@ TEST_P(Agreement, AllBooksAgreeOnEveryMessage) {
     }
     fills_seen += naive_fills.size();
   }
-  // The stream has to exercise matching, not just build a book.
   EXPECT_GT(fills_seen, kMessages / 20);
 }
 

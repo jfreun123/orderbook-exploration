@@ -1,4 +1,4 @@
 timer floor: 11.6 ns (median of an empty measurement)
 vector-levels fresh levels=1000 updates=300000 evict_kb=4096 levels_at_end=819+812
 op              count    p50    p90    p99   p99.9      max
-update         300000     80    209    646     995   141157
+update         300000     79    207    677    1053    81196

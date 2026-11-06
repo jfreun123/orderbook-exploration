@@ -2,24 +2,30 @@
 
 // The "reverse vector" book from David Gross's CppCon 2024 talk "When
 // Nanoseconds Matter: Ultrafast Trading Systems in C++": each side's price
-// levels sit in one sorted vector with the best price at the back.
+// levels sit in one sorted vector, worst price first and best price at the
+// back.
 //
 // Nearly all activity happens near the best price. With the best price at
 // the back, adding or removing a level there shifts only the few levels
-// behind it, and finding a level is a short linear scan from the back, which
-// beats a binary search when the target is usually in the last few slots.
-// The levels are contiguous, so that scan walks memory in order instead of
+// behind it, and finding a level is a short scan from the back, which beats
+// a binary search when the target is usually in the last few slots. The
+// levels are contiguous, so that scan walks memory in order instead of
 // chasing tree pointers like std::map.
 //
-// Each level's orders live in an OrderPool queue (see order_pool.hpp), the
-// same storage ArrayBook uses, so the two books differ only in how they find
-// a price level.
+// find() scans from the back for an existing level and gives up once it has
+// passed the place the price would be. find_or_insert() does the same scan
+// and inserts a new level at that place.
+//
+// Each level's orders live in an OrderPool queue, the same storage ArrayBook
+// uses, so the two books differ only in how they find a price level.
+//
+// modify keeps the order's place in the queue only when it shrinks at the
+// same price. Any other change pulls the order and sends it again as a new
+// arrival (docs/matching-rules.md).
 
-// orderbook
 #include "orderbook/order_pool.hpp"
 #include "orderbook/types.hpp"
 
-// std
 #include <algorithm>
 #include <cstddef>
 #include <iterator>
@@ -36,8 +42,7 @@ public:
     }
     qty = match(id, side, price, qty, fills);
     if (qty > 0) {
-      Levels &levels = levels_of(side);
-      auto level = find_or_insert(levels, side, price);
+      auto level = find_or_insert(levels_of(side), side, price);
       pool_.push_back(level->orders, id, side, price, qty);
     }
     return true;
@@ -47,9 +52,7 @@ public:
     if (qty <= 0) {
       return false;
     }
-    // Whatever cannot be filled is dropped, never rested.
-    match_while(id, qty, levels_of(opposite(side)), fills,
-                [](Price) { return true; });
+    match(id, side, market_limit(side), qty, fills);
     return true;
   }
 
@@ -68,8 +71,6 @@ public:
       return false;
     }
     OrderPool::Node &order = pool_[node];
-    // Shrinking in place keeps the order's place in the queue. Anything else
-    // loses it: the order is pulled and sent again as a new arrival.
     if (price == order.price && qty <= order.qty) {
       order.qty = qty;
       return true;
@@ -99,21 +100,18 @@ private:
     OrderPool::Queue orders;
   };
 
-  // Worst price first, best price last: bids ascending, asks descending.
   using Levels = std::vector<Level>;
 
   Levels &levels_of(Side side) { return side == Side::Buy ? bids_ : asks_; }
 
-  // Scans from the back (the best price) towards the front for `price`.
   static Levels::iterator find(Levels &levels, Side side, Price price) {
-    auto it = levels.end();
-    while (it != levels.begin()) {
+    for (auto it = levels.end(); it != levels.begin();) {
       --it;
       if (it->price == price) {
         return it;
       }
       if (better(side, price, it->price)) {
-        break; // passed the place it would be
+        break;
       }
     }
     return levels.end();
@@ -121,8 +119,6 @@ private:
 
   static Levels::iterator find_or_insert(Levels &levels, Side side,
                                          Price price) {
-    // The first position from the back whose level is better than `price`
-    // ends the scan; the new level goes just after it.
     auto it = levels.end();
     while (it != levels.begin() && !better(side, price, std::prev(it)->price)) {
       --it;
@@ -134,17 +130,9 @@ private:
   }
 
   Qty match(OrderId id, Side side, Price limit, Qty qty, Fills &fills) {
-    return match_while(
-        id, qty, levels_of(opposite(side)), fills,
-        [&](Price resting) { return crosses(side, limit, resting); });
-  }
-
-  // Trades with the best level while `trades_at(best price)` holds, and
-  // returns what is left.
-  template <class TradesAt>
-  Qty match_while(OrderId id, Qty qty, Levels &levels, Fills &fills,
-                  TradesAt trades_at) {
-    while (qty > 0 && !levels.empty() && trades_at(levels.back().price)) {
+    Levels &levels = levels_of(opposite(side));
+    while (qty > 0 && !levels.empty() &&
+           crosses(side, limit, levels.back().price)) {
       Level &level = levels.back();
       const Index head = level.orders.head;
       OrderPool::Node &maker = pool_[head];
