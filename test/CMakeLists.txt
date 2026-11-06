@@ -2,7 +2,7 @@
 
 include(GoogleTest)
 
-foreach(name leetcode_test book_test agreement_test)
+foreach(name leetcode_test book_test agreement_test level_book_test)
   add_executable(${name} source/${name}.cpp)
   target_link_libraries(${name} PRIVATE orderbook-exploration_lib GTest::gtest_main)
   target_compile_features(${name} PRIVATE cxx_std_23)

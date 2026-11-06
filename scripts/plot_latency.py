@@ -3,14 +3,15 @@
 
     scripts/plot_latency.py OUT.png TITLE CSV [CSV ...]
 
-Each CSV becomes one series, labelled "<book> (<variant>)". Bars are 1 ns
-buckets from 0 to 200 ns, overlaid, with a dashed line at each median, in
+Each CSV becomes one series, labelled "<book> (<variant>)". Bars cover 0
+to MAX_NS (environment variable, default 200) in 200 buckets, overlaid, with a dashed line at each median, in
 the style of the latency chart in David Gross's CppCon 2024 talk.
-Anything slower than 200 ns still counts towards the median; the share of
+Anything slower than MAX_NS still counts towards the median; the share of
 messages past the edge of the chart is printed in the legend.
 """
 
 import csv
+import os
 import sys
 from collections import defaultdict
 
@@ -26,7 +27,8 @@ INK = "#1f1f1e"
 MUTED = "#6b6a63"
 GRID = "#e4e3de"
 SURFACE = "#fcfcfb"
-MAX_NS = 200
+MAX_NS = int(os.environ.get("MAX_NS", "200"))
+BUCKETS = 200
 
 
 def load(path):
@@ -61,17 +63,22 @@ def main():
     for path, color in zip(paths, COLORS):
         label, counts = load(path)
         total = sum(counts.values())
-        xs = list(range(MAX_NS + 1))
-        ys = [counts.get(ns, 0) / total * 100 for ns in xs]
+        width = max(1, MAX_NS // BUCKETS)
+        binned = defaultdict(int)
+        for ns, count in counts.items():
+            if ns <= MAX_NS:
+                binned[ns // width * width] += count
+        xs = list(range(0, MAX_NS + 1, width))
+        ys = [binned.get(x, 0) / total * 100 for x in xs]
         past = sum(c for ns, c in counts.items() if ns > MAX_NS) / total * 100
         med = median(counts)
-        ax.bar(xs, ys, width=1.0, color=color, alpha=0.45, linewidth=0,
+        ax.bar(xs, ys, width=width, align="edge", color=color, alpha=0.45, linewidth=0,
                label=f"{label}: median {med} ns, {past:.1f}% past {MAX_NS} ns")
         ax.axvline(med, color=color, linestyle="--", linewidth=2)
 
     ax.set_title(title, color=INK, fontsize=14, loc="left")
     ax.set_xlabel("Latency per message (ns)", color=INK)
-    ax.set_ylabel("Share of messages (%)", color=INK)
+    ax.set_ylabel(f"Share of messages per {width} ns (%)" if width > 1 else "Share of messages (%)", color=INK)
     ax.set_xlim(0, MAX_NS)
     ax.set_ylim(bottom=0)
     ax.tick_params(colors=MUTED)

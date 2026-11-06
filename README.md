@@ -33,6 +33,39 @@ All four implement the same calls (`add_limit`, `add_market`, `cancel`,
 `VectorBook` is the "reverse vector" from David Gross's CppCon 2024 talk
 [When Nanoseconds Matter: Ultrafast Trading Systems in C++](https://www.youtube.com/watch?v=sX2nF1fW7kI).
 
+## std::map vs the reverse vector
+
+Gross's book (`AddOrder(Side, Price, Volume)`) is **market-by-price**: one
+quantity per price, no orders. Finding the level is the whole update, so the
+level container decides the latency.
+[`level_book.hpp`](source/orderbook/level_book.hpp) rebuilds that book with
+`std::map` and with the reverse vector (linear and binary search), fed by
+[`LevelFlow`](source/orderbook/flow.hpp): 1,000 levels a side, 90% of updates
+within 8 ticks of the top.
+
+Median / p90 per update, ns, from `scripts/latency_levels.sh`:
+
+| | book hot in cache | book pushed out of cache (`--evict 4096`), fresh heap | out of cache, scattered heap |
+|---|---|---|---|
+| `std::map` | 49 / 74 | 241 / 489 | 302 / 1380 |
+| reverse vector, linear | 25 / 48 | 80 / 209 | 78 / 205 |
+| reverse vector, binary | 36 / 47 | 96 / 184 | 93 / 171 |
+
+- In a tight benchmark loop the whole book stays in L1/L2, so where the map's
+  nodes sit in memory barely matters. `--evict KB` reads that much other
+  memory between updates (outside the timed part), as the rest of a trading
+  system would; then every map node is a likely cache miss and a scattered
+  heap makes it worse, while the vector's levels stay contiguous.
+- Linear search from the back wins the median because most updates land in
+  the last few slots, but its tail is long when an update lands deep in the
+  book (p99 446 ns hot); binary search keeps the tail short.
+
+In the order-by-order books (`map`, `vector`, `array`) this difference is
+mostly hidden: every message also looks the order up in a
+`std::unordered_map` and touches an order node, so with the book out of
+cache all three have a median near 270 ns. That per-order index is the next
+thing to make contiguous.
+
 ## Running everything
 
 Everything runs in the pinned toolchain image (`Dockerfile`), through
@@ -51,6 +84,9 @@ scripts/docker.sh --cpuset-cpus=2 -- ./build-bench/benchmark/benchmark
 # Latency: every message timed on its own, on a fresh heap and a scattered
 # one, plotted into results/latency-*.png
 scripts/docker.sh --cpuset-cpus=2 -- scripts/latency.sh
+
+# The market-by-price comparison above, plotted into results/levels-*.png
+scripts/docker.sh --cpuset-cpus=2 -- scripts/latency_levels.sh
 
 # Replay: a JSON trace of every call and the book after it, for viz/index.html
 scripts/docker.sh ./build/app/replay --book array --messages 600 > viz/trace.json
@@ -98,7 +134,7 @@ orderbook-exploration/
 ├── benchmark/source/        # benchmark (throughput), latency (per-message histogram)
 ├── app/source/replay.cpp    # Writes a JSON trace for the viewer
 ├── viz/index.html           # Plays a trace back as a price ladder
-├── scripts/                 # docker.sh, latency.sh, plot_latency.py
+├── scripts/                 # docker.sh, latency.sh, latency_levels.sh, plot_latency.py
 ├── docs/matching-rules.md   # The rules every book follows
 ├── results/                 # Output of the runs quoted in the blog
 └── Dockerfile               # Pinned toolchain
